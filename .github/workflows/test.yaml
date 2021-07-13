@@ -29,8 +29,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-go-
 
-      - name: Test
-        uses: actions/setup-go@v2
+      - uses: actions/setup-go@v2
+      
+      - run: 'go test ./...'
         env:
           DYNAMODB_ENDPOINT: http://localhost:8000
-        run: 'go test ./...'
