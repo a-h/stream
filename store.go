@@ -65,7 +65,7 @@ func (ddb *DynamoDBStore) Get(id string, state State) (sequence int64, err error
 		err = ErrStateNotFound
 		return
 	}
-	err = dynamodbattribute.UnmarshalMap(gio.Item, &state)
+	err = dynamodbattribute.UnmarshalMap(gio.Item, state)
 	if err != nil {
 		return
 	}
@@ -108,8 +108,8 @@ func (ddb *DynamoDBStore) createInboundTransactWriteItems(id string, atSequence 
 	for i := 0; i < len(inbound); i++ {
 		var item map[string]*dynamodb.AttributeValue
 		item, err = ddb.createRecord(id,
-			ddb.createInboundRecordSortKey(inbound[i].EventName(), atSequence+1),
-			atSequence+1,
+			ddb.createInboundRecordSortKey(inbound[i].EventName(), atSequence+int64(i+1)),
+			atSequence+int64(i+1),
 			inbound[i],
 			inbound[i].EventName())
 		if err != nil {
@@ -126,7 +126,7 @@ func (ddb *DynamoDBStore) createOutboundTransactWriteItems(id string, atSequence
 		var item map[string]*dynamodb.AttributeValue
 		item, err = ddb.createRecord(id,
 			ddb.createOutboundRecordSortKey(outbound[i].EventName(), atSequence+1, i),
-			atSequence+1,
+			atSequence+int64(i+1),
 			outbound[i],
 			outbound[i].EventName())
 		if err != nil {
@@ -239,12 +239,54 @@ func (ddb *DynamoDBStore) getRecordType(r map[string]*dynamodb.AttributeValue) (
 	return *v.S, nil
 }
 
-type EventName string
-type InboundEventFactory map[EventName]func() InboundEvent
-type OutboundEventFactory map[EventName]func() OutboundEvent
+func NewInboundEventReader() *InboundEventReader {
+	return &InboundEventReader{
+		readers: make(map[string]func(item map[string]*dynamodb.AttributeValue) (InboundEvent, error), 0),
+	}
+}
+
+type InboundEventReader struct {
+	readers map[string]func(item map[string]*dynamodb.AttributeValue) (InboundEvent, error)
+}
+
+func (r *InboundEventReader) Add(eventName string, f func(item map[string]*dynamodb.AttributeValue) (InboundEvent, error)) {
+	r.readers[eventName] = f
+}
+
+func (r *InboundEventReader) Read(eventName string, item map[string]*dynamodb.AttributeValue) (e InboundEvent, ok bool, err error) {
+	f, ok := r.readers[eventName]
+	if !ok {
+		return
+	}
+	e, err = f(item)
+	return
+}
+
+func NewOutboundEventReader() *OutboundEventReader {
+	return &OutboundEventReader{
+		readers: make(map[string]func(item map[string]*dynamodb.AttributeValue) (OutboundEvent, error), 0),
+	}
+}
+
+type OutboundEventReader struct {
+	readers map[string]func(item map[string]*dynamodb.AttributeValue) (OutboundEvent, error)
+}
+
+func (r *OutboundEventReader) Add(eventName string, f func(item map[string]*dynamodb.AttributeValue) (OutboundEvent, error)) {
+	r.readers[eventName] = f
+}
+
+func (r *OutboundEventReader) Read(eventName string, item map[string]*dynamodb.AttributeValue) (e OutboundEvent, ok bool, err error) {
+	f, ok := r.readers[eventName]
+	if !ok {
+		return
+	}
+	e, err = f(item)
+	return
+}
 
 // Query data for the id.
-func (ddb *DynamoDBStore) Query(id string, state State, inboundFactories InboundEventFactory, outboundFactories OutboundEventFactory) (sequence int64, inbound []InboundEvent, outbound []OutboundEvent, err error) {
+func (ddb *DynamoDBStore) Query(id string, state State, inboundEventReader *InboundEventReader, outboundEventReader *OutboundEventReader) (sequence int64, inbound []InboundEvent, outbound []OutboundEvent, err error) {
 	if reflect.ValueOf(state).Kind() != reflect.Ptr {
 		err = errors.New("the state parameter must be a pointer")
 		return
@@ -268,7 +310,7 @@ func (ddb *DynamoDBStore) Query(id string, state State, inboundFactories Inbound
 			switch ddb.sortKeyPrefix(r) {
 			case "STATE":
 				found = true
-				pagerError = dynamodbattribute.UnmarshalMap(r, &state)
+				pagerError = dynamodbattribute.UnmarshalMap(r, state)
 				if pagerError != nil {
 					return false
 				}
@@ -282,14 +324,13 @@ func (ddb *DynamoDBStore) Query(id string, state State, inboundFactories Inbound
 				if pagerError != nil {
 					return false
 				}
-				f, ok := inboundFactories[EventName(typ)]
-				if !ok {
-					pagerError = fmt.Errorf("inbound event: factory not found for %q", typ)
+				event, ok, err := inboundEventReader.Read(typ, r)
+				if err != nil {
+					pagerError = err
 					return false
 				}
-				event := f()
-				pagerError = dynamodbattribute.UnmarshalMap(r, &event)
-				if pagerError != nil {
+				if !ok {
+					pagerError = fmt.Errorf("inbound event: no reader for %q", typ)
 					return false
 				}
 				inbound = append(inbound, event)
@@ -299,14 +340,13 @@ func (ddb *DynamoDBStore) Query(id string, state State, inboundFactories Inbound
 				if pagerError != nil {
 					return false
 				}
-				f, ok := outboundFactories[EventName(typ)]
-				if !ok {
-					pagerError = fmt.Errorf("inbound event: factory not found for %q", typ)
+				event, ok, err := outboundEventReader.Read(typ, r)
+				if err != nil {
+					pagerError = err
 					return false
 				}
-				event := f()
-				pagerError = dynamodbattribute.UnmarshalMap(r, &event)
-				if pagerError != nil {
+				if !ok {
+					pagerError = fmt.Errorf("outbound event: no reader for %q", typ)
 					return false
 				}
 				outbound = append(outbound, event)
@@ -334,5 +374,5 @@ func (ddb *DynamoDBStore) sortKeyPrefix(item map[string]*dynamodb.AttributeValue
 	if !ok || sk.S == nil {
 		return ""
 	}
-	return strings.SplitN(*sk.S, "/", 1)[0]
+	return strings.SplitN(*sk.S, "/", 2)[0]
 }

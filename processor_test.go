@@ -3,6 +3,8 @@ package stream
 import (
 	"testing"
 
+	"github.com/aws/aws-sdk-go/service/dynamodb"
+	"github.com/aws/aws-sdk-go/service/dynamodb/dynamodbattribute"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -164,6 +166,9 @@ func TestProcessorIntegration(t *testing.T) {
 		BatchInput{Number: 3},
 		BatchInput{Number: 4},
 	)
+	if err != nil {
+		t.Errorf("failed to process events: %v", err)
+	}
 
 	// Expect the expected state to match.
 	expected := &BatchState{
@@ -172,6 +177,46 @@ func TestProcessorIntegration(t *testing.T) {
 	}
 	if diff := cmp.Diff(expected, state); diff != "" {
 		t.Error("unexpected state")
+		t.Error(diff)
+	}
+
+	// Get the data fresh from the DB.
+	fresh := &BatchState{}
+	_, err = Load(s, "id", fresh)
+	if err != nil {
+		t.Fatalf("failed to load data: %v", err)
+	}
+	if diff := cmp.Diff(expected, fresh); diff != "" {
+		t.Error("unexpected state after load")
+		t.Error(diff)
+	}
+
+	// Query to check the state of the database.
+	queriedState := &BatchState{}
+	inboundEventReader := NewInboundEventReader()
+	inboundEventReader.Add(BatchInput{}.EventName(), func(item map[string]*dynamodb.AttributeValue) (InboundEvent, error) {
+		var event BatchInput
+		err := dynamodbattribute.UnmarshalMap(item, &event)
+		return event, err
+	})
+	outboundEventReader := NewOutboundEventReader()
+	outboundEventReader.Add(BatchOutput{}.EventName(), func(item map[string]*dynamodb.AttributeValue) (OutboundEvent, error) {
+		var event BatchOutput
+		err := dynamodbattribute.UnmarshalMap(item, &event)
+		return event, err
+	})
+	sequence, inbound, outbound, err := s.Query("id", queriedState, inboundEventReader, outboundEventReader)
+	if sequence != 1 {
+		t.Errorf("query expected sequence of 1, got %d", sequence)
+	}
+	if len(inbound) != 4 {
+		t.Errorf("query expected 4 inbound records to be stored, got %d", len(inbound))
+	}
+	if len(outbound) != 2 {
+		t.Errorf("query expected 2 outbound records to be stored, got %d", len(outbound))
+	}
+	if diff := cmp.Diff(expected, queriedState); diff != "" {
+		t.Error("unexpected state after query")
 		t.Error(diff)
 	}
 }
