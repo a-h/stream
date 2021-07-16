@@ -19,8 +19,37 @@ import (
 var ErrStateNotFound = errors.New("state not found")
 var ErrOptimisticConcurrency = errors.New("state has been updated since it was read, try again")
 
-// NewStore creates a new store.
-func NewStore(region, tableName, namespace string) (s *DynamoDBStore, err error) {
+var sess *session.Session
+var client *dynamodb.DynamoDB
+var initErr error
+
+func init() {
+	sess, initErr = session.NewSession()
+	if initErr != nil {
+		return
+	}
+	client = dynamodb.New(sess)
+}
+
+// NewStore creates a new store using default config.
+func NewStore(tableName, namespace string) (s *DynamoDBStore, err error) {
+	if initErr != nil {
+		err = initErr
+		return
+	}
+	s = &DynamoDBStore{
+		Client:    client,
+		TableName: aws.String(tableName),
+		Now: func() time.Time {
+			return time.Now().UTC()
+		},
+		Namespace: namespace,
+	}
+	return
+}
+
+// NewStoreWithConfig creates a new store with custom config.
+func NewStoreWithConfig(region, tableName, namespace string) (s *DynamoDBStore, err error) {
 	sess, err := session.NewSession(&aws.Config{Region: aws.String(region)})
 	if err != nil {
 		return

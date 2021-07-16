@@ -21,7 +21,7 @@ type BatchState struct {
 	Values         []int
 }
 
-func (s *BatchState) Process(event InboundEvent) (outbound []OutboundEvent) {
+func (s *BatchState) Process(event InboundEvent) (outbound []OutboundEvent, err error) {
 	switch e := event.(type) {
 	case BatchInput:
 		s.Values = append(s.Values, e.Number)
@@ -127,7 +127,11 @@ func TestBatch(t *testing.T) {
 
 			// Act.
 			for i := 0; i < len(tt.events); i++ {
-				actualOutboundEvents = append(actualOutboundEvents, actual.Process(tt.events[i])...)
+				oe, err := actual.Process(tt.events[i])
+				if err != nil {
+					t.Fatalf("failed to process events: %v", err)
+				}
+				actualOutboundEvents = append(actualOutboundEvents, oe...)
 			}
 
 			// Assert.
@@ -150,7 +154,7 @@ func TestProcessorIntegration(t *testing.T) {
 	// Arrange.
 	name := createLocalTable(t)
 	defer deleteLocalTable(t, name)
-	s, err := NewStore(region, name, "Batch")
+	s, err := NewStoreWithConfig(region, name, "Batch")
 	s.Client = testClient
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
@@ -241,7 +245,11 @@ func TestProcessorIntegration(t *testing.T) {
 		recalculatedState := NewBatchState()
 		var recalculatedOutbound []OutboundEvent
 		for i := 0; i < len(queriedInbound); i++ {
-			recalculatedOutbound = append(recalculatedOutbound, recalculatedState.Process(queriedInbound[i])...)
+			outboundEvents, err := recalculatedState.Process(queriedInbound[i])
+			if err != nil {
+				t.Fatalf("failed to recalculate state: %v", err)
+			}
+			recalculatedOutbound = append(recalculatedOutbound, outboundEvents...)
 		}
 		if diff := cmp.Diff(queriedState, recalculatedState); diff != "" {
 			t.Error("unexpected state after recalculation")

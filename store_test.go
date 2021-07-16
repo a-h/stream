@@ -12,7 +12,7 @@ type AverageState struct {
 	Value float64
 }
 
-func (s *AverageState) Process(event InboundEvent) (outbound []OutboundEvent) {
+func (s *AverageState) Process(event InboundEvent) (outbound []OutboundEvent, err error) {
 	switch e := event.(type) {
 	case AverageInput:
 		s.Count++
@@ -37,7 +37,7 @@ func TestGetStateNotFoundIntegration(t *testing.T) {
 	// Arrange.
 	name := createLocalTable(t)
 	defer deleteLocalTable(t, name)
-	s, err := NewStore(region, name, "Average")
+	s, err := NewStoreWithConfig(region, name, "Average")
 	s.Client = testClient
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
@@ -63,7 +63,7 @@ func TestPutStateIntegration(t *testing.T) {
 	// Arrange.
 	name := createLocalTable(t)
 	defer deleteLocalTable(t, name)
-	s, err := NewStore(region, name, "Average")
+	s, err := NewStoreWithConfig(region, name, "Average")
 	s.Client = testClient
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
@@ -86,7 +86,7 @@ func TestPutStateCannotOverwriteIntegration(t *testing.T) {
 	// Arrange.
 	name := createLocalTable(t)
 	defer deleteLocalTable(t, name)
-	s, err := NewStore(region, name, "Average")
+	s, err := NewStoreWithConfig(region, name, "Average")
 	s.Client = testClient
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
@@ -111,7 +111,7 @@ func TestGetStateIntegration(t *testing.T) {
 	// Arrange.
 	name := createLocalTable(t)
 	defer deleteLocalTable(t, name)
-	s, err := NewStore(region, name, "Average")
+	s, err := NewStoreWithConfig(region, name, "Average")
 	s.Client = testClient
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)

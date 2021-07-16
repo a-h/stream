@@ -7,7 +7,7 @@ import (
 
 // State of the entity.
 type State interface {
-	Process(event InboundEvent) (outbound []OutboundEvent)
+	Process(event InboundEvent) (outbound []OutboundEvent, err error)
 }
 
 // InboundEvents are received from external systems.
@@ -76,7 +76,11 @@ func (p *Processor) Process(events ...InboundEvent) error {
 	var outbound []OutboundEvent
 	for i := 0; i < len(events); i++ {
 		inbound = append(inbound, events[i])
-		outbound = append(outbound, p.state.Process(events[i])...)
+		outboundEvents, err := p.state.Process(events[i])
+		if err != nil {
+			return err
+		}
+		outbound = append(outbound, outboundEvents...)
 	}
 	return p.store.Put(p.id, p.sequence, p.state, inbound, outbound)
 }
