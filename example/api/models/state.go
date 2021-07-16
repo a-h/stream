@@ -7,8 +7,13 @@ import (
 	"github.com/a-h/stream"
 )
 
-func NewSlotMachine() *SlotMachine {
-	return &SlotMachine{}
+func NewSlotMachine(id string) *SlotMachine {
+	return &SlotMachine{
+		ID:        id,
+		Balance:   0,
+		Payout:    4,
+		WinChance: 0.18,
+	}
 }
 
 var ErrCannotInsertCoin = errors.New("cannot insert coin")
@@ -80,7 +85,7 @@ func (s *SlotMachine) PullHandle() (win bool, ok bool) {
 		s.Wins++
 		s.Balance -= (s.Payout - 1)
 	} else {
-		s.Losses--
+		s.Losses++
 		s.Balance++
 	}
 	return

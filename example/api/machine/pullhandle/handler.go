@@ -46,7 +46,7 @@ func (h Handler) Post(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	machine := models.NewSlotMachine()
+	machine := models.NewSlotMachine(id)
 	p, err := stream.Load(h.Store, id, machine)
 	if err != nil {
 		http.Error(w, "failed to load machine", http.StatusInternalServerError)

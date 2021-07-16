@@ -40,7 +40,7 @@ func NewExampleStack(scope constructs.Construct, id string, props *ExampleStackP
 	insertCoinPost := awslambda.NewFunction(stack, jsii.String("insertCoinHandler"), &awslambda.FunctionProps{
 		Runtime: awslambda.Runtime_GO_1_X(),
 		Handler: jsii.String("lambdaHandler"),
-		Code:    awslambda.Code_FromAsset(jsii.String("../api/machine/insertcoin"), &awss3assets.AssetOptions{}),
+		Code:    awslambda.Code_FromAsset(jsii.String("../api/machine/insertcoin/post"), &awss3assets.AssetOptions{}),
 		Environment: &map[string]*string{
 			"MACHINE_TABLE": slotMachineTable.TableName(),
 		},
@@ -51,12 +51,22 @@ func NewExampleStack(scope constructs.Construct, id string, props *ExampleStackP
 	pullHandlePost := awslambda.NewFunction(stack, jsii.String("pullHandleHandler"), &awslambda.FunctionProps{
 		Runtime: awslambda.Runtime_GO_1_X(),
 		Handler: jsii.String("lambdaHandler"),
-		Code:    awslambda.Code_FromAsset(jsii.String("../api/machine/pullhandle"), &awss3assets.AssetOptions{}),
+		Code:    awslambda.Code_FromAsset(jsii.String("../api/machine/pullhandle/post"), &awss3assets.AssetOptions{}),
 		Environment: &map[string]*string{
 			"MACHINE_TABLE": slotMachineTable.TableName(),
 		},
 	})
 	slotMachineTable.GrantReadWriteData(pullHandlePost)
+	// POST /machine/id handler.
+	machinePost := awslambda.NewFunction(stack, jsii.String("machinePostHandler"), &awslambda.FunctionProps{
+		Runtime: awslambda.Runtime_GO_1_X(),
+		Handler: jsii.String("lambdaHandler"),
+		Code:    awslambda.Code_FromAsset(jsii.String("../api/machine/post"), &awss3assets.AssetOptions{}),
+		Environment: &map[string]*string{
+			"MACHINE_TABLE": slotMachineTable.TableName(),
+		},
+	})
+	slotMachineTable.GrantReadWriteData(machinePost)
 	// GET /machine/id handler.
 	machineGet := awslambda.NewFunction(stack, jsii.String("machineGetHandler"), &awslambda.FunctionProps{
 		Runtime: awslambda.Runtime_GO_1_X(),
@@ -78,6 +88,9 @@ func NewExampleStack(scope constructs.Construct, id string, props *ExampleStackP
 
 	// /machine/{id}
 	machine := api.Root().AddResource(jsii.String("machine"), apiResourceOpts).AddResource(jsii.String("{id}"), apiResourceOpts)
+	// POST
+	machinePostIntegration := awsapigateway.NewLambdaIntegration(machinePost, apiLambdaOpts)
+	machine.AddMethod(jsii.String("POST"), machinePostIntegration, &awsapigateway.MethodOptions{})
 	// GET
 	machineGetIntegration := awsapigateway.NewLambdaIntegration(machineGet, apiLambdaOpts)
 	machine.AddMethod(jsii.String("GET"), machineGetIntegration, &awsapigateway.MethodOptions{})
