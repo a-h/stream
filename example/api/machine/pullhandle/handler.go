@@ -62,6 +62,7 @@ func (h Handler) Post(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, fmt.Sprintf("cannot pull handle, has a coin been inserted?"), http.StatusNotAcceptable)
 			return
 		}
+		h.Log.Error("failed to pull handle", zap.Error(err))
 		http.Error(w, fmt.Sprintf("internal server error"), http.StatusInternalServerError)
 		return
 	}

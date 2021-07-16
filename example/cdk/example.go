@@ -40,7 +40,7 @@ func NewExampleStack(scope constructs.Construct, id string, props *ExampleStackP
 	insertCoinPost := awslambda.NewFunction(stack, jsii.String("insertCoinHandler"), &awslambda.FunctionProps{
 		Runtime: awslambda.Runtime_GO_1_X(),
 		Handler: jsii.String("lambdaHandler"),
-		Code:    awslambda.Code_FromAsset(jsii.String("../api/machine/insertCoin"), &awss3assets.AssetOptions{}),
+		Code:    awslambda.Code_FromAsset(jsii.String("../api/machine/insertcoin"), &awss3assets.AssetOptions{}),
 		Environment: &map[string]*string{
 			"MACHINE_TABLE": slotMachineTable.TableName(),
 		},
@@ -51,7 +51,7 @@ func NewExampleStack(scope constructs.Construct, id string, props *ExampleStackP
 	pullHandlePost := awslambda.NewFunction(stack, jsii.String("pullHandleHandler"), &awslambda.FunctionProps{
 		Runtime: awslambda.Runtime_GO_1_X(),
 		Handler: jsii.String("lambdaHandler"),
-		Code:    awslambda.Code_FromAsset(jsii.String("../api/machine/pullHandle"), &awss3assets.AssetOptions{}),
+		Code:    awslambda.Code_FromAsset(jsii.String("../api/machine/pullhandle"), &awss3assets.AssetOptions{}),
 		Environment: &map[string]*string{
 			"MACHINE_TABLE": slotMachineTable.TableName(),
 		},

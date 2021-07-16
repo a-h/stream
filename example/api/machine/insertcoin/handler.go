@@ -60,6 +60,7 @@ func (h Handler) Post(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, fmt.Sprintf("cannot insert coin, is there one already in the slot?"), http.StatusNotAcceptable)
 			return
 		}
+		h.Log.Error("failed to insert coin", zap.Error(err))
 		http.Error(w, fmt.Sprintf("internal server error"), http.StatusInternalServerError)
 		return
 	}
