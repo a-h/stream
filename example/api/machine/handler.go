@@ -49,11 +49,13 @@ func (h Handler) Get(w http.ResponseWriter, r *http.Request) {
 	_, err := h.Store.Get(id, machine)
 	if err != nil {
 		http.Error(w, "failed to get machine", http.StatusInternalServerError)
+		return
 	}
 
 	enc := json.NewEncoder(w)
 	err = enc.Encode(machine)
 	if err != nil {
 		http.Error(w, "failed to encode machine", http.StatusInternalServerError)
+		return
 	}
 }

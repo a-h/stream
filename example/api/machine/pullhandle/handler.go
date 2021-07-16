@@ -50,6 +50,7 @@ func (h Handler) Post(w http.ResponseWriter, r *http.Request) {
 	p, err := stream.Load(h.Store, id, machine)
 	if err != nil {
 		http.Error(w, "failed to load machine", http.StatusInternalServerError)
+		return
 	}
 
 	// You might need to load the model from the HTTP body, but here we're not expecting one.
@@ -69,5 +70,6 @@ func (h Handler) Post(w http.ResponseWriter, r *http.Request) {
 	err = enc.Encode(machine)
 	if err != nil {
 		http.Error(w, "failed to encode machine", http.StatusInternalServerError)
+		return
 	}
 }
