@@ -307,7 +307,7 @@ func (ddb *DynamoDBStore) Query(id string, state State, inboundEventReader *Inbo
 	pager := func(qo *dynamodb.QueryOutput, lastPage bool) (carryOn bool) {
 		for i := 0; i < len(qo.Items); i++ {
 			r := qo.Items[i]
-			switch ddb.sortKeyPrefix(r) {
+			switch ddb.getSortKeyPrefix(r) {
 			case "STATE":
 				found = true
 				pagerError = dynamodbattribute.UnmarshalMap(r, state)
@@ -369,7 +369,7 @@ func (ddb *DynamoDBStore) Query(id string, state State, inboundEventReader *Inbo
 	return
 }
 
-func (ddb *DynamoDBStore) sortKeyPrefix(item map[string]*dynamodb.AttributeValue) (prefix string) {
+func (ddb *DynamoDBStore) getSortKeyPrefix(item map[string]*dynamodb.AttributeValue) (prefix string) {
 	sk, ok := item["_sk"]
 	if !ok || sk.S == nil {
 		return ""

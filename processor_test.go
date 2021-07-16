@@ -8,6 +8,12 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
+func NewBatchState() *BatchState {
+	return &BatchState{
+		BatchSize: 2,
+	}
+}
+
 // BatchState outputs a BatchOutput when BatchSize BatchInputs have been received.
 type BatchState struct {
 	BatchSize      int
@@ -151,72 +157,127 @@ func TestProcessorIntegration(t *testing.T) {
 	}
 
 	// Create an empty state record.
-	state := &BatchState{
-		BatchSize:      2,
-		BatchesEmitted: 0,
-	}
+	state := NewBatchState()
 	processor, err := New(s, "id", state)
 	if err != nil {
 		t.Fatalf("failed to create new state: %v", err)
 	}
 
-	// Process 4 events.
-	err = processor.Process(BatchInput{Number: 1},
-		BatchInput{Number: 2},
-		BatchInput{Number: 3},
-		BatchInput{Number: 4},
-	)
-	if err != nil {
-		t.Errorf("failed to process events: %v", err)
-	}
+	t.Run("processing inbound events updates the state", func(t *testing.T) {
+		err = processor.Process(BatchInput{Number: 1},
+			BatchInput{Number: 2},
+			BatchInput{Number: 3},
+			BatchInput{Number: 4},
+		)
+		if err != nil {
+			t.Errorf("failed to process events: %v", err)
+		}
 
-	// Expect the expected state to match.
-	expected := &BatchState{
-		BatchSize:      2,
-		BatchesEmitted: 2,
-	}
-	if diff := cmp.Diff(expected, state); diff != "" {
-		t.Error("unexpected state")
-		t.Error(diff)
-	}
+		// Expect the expected state to match.
+		expected := &BatchState{
+			BatchSize:      2,
+			BatchesEmitted: 2,
+		}
+		if diff := cmp.Diff(expected, state); diff != "" {
+			t.Error("unexpected state")
+			t.Error(diff)
+		}
+	})
 
-	// Get the data fresh from the DB.
-	fresh := &BatchState{}
-	_, err = Load(s, "id", fresh)
-	if err != nil {
-		t.Fatalf("failed to load data: %v", err)
-	}
-	if diff := cmp.Diff(expected, fresh); diff != "" {
-		t.Error("unexpected state after load")
-		t.Error(diff)
-	}
+	t.Run("load returns the state without needing to process all the inbound events", func(t *testing.T) {
+		fresh := &BatchState{}
+		_, err = Load(s, "id", fresh)
+		if err != nil {
+			t.Fatalf("failed to load data: %v", err)
+		}
+		expected := &BatchState{
+			BatchSize:      2,
+			BatchesEmitted: 2,
+		}
+		if diff := cmp.Diff(expected, fresh); diff != "" {
+			t.Error("unexpected state after load")
+			t.Error(diff)
+		}
+	})
 
-	// Query to check the state of the database.
 	queriedState := &BatchState{}
-	inboundEventReader := NewInboundEventReader()
-	inboundEventReader.Add(BatchInput{}.EventName(), func(item map[string]*dynamodb.AttributeValue) (InboundEvent, error) {
-		var event BatchInput
-		err := dynamodbattribute.UnmarshalMap(item, &event)
-		return event, err
+	var queriedSequence int64
+	var queriedInbound []InboundEvent
+	var queriedOutbound []OutboundEvent
+	t.Run("it is possible to query the state, inbound and outbound events", func(t *testing.T) {
+		inboundEventReader := NewInboundEventReader()
+		inboundEventReader.Add(BatchInput{}.EventName(), func(item map[string]*dynamodb.AttributeValue) (InboundEvent, error) {
+			var event BatchInput
+			err := dynamodbattribute.UnmarshalMap(item, &event)
+			return event, err
+		})
+		outboundEventReader := NewOutboundEventReader()
+		outboundEventReader.Add(BatchOutput{}.EventName(), func(item map[string]*dynamodb.AttributeValue) (OutboundEvent, error) {
+			var event BatchOutput
+			err := dynamodbattribute.UnmarshalMap(item, &event)
+			return event, err
+		})
+		queriedSequence, queriedInbound, queriedOutbound, err = s.Query("id", queriedState, inboundEventReader, outboundEventReader)
+		if queriedSequence != 1 {
+			t.Errorf("query expected sequence of 1, got %d", queriedSequence)
+		}
+		if len(queriedInbound) != 4 {
+			t.Errorf("query expected 4 inbound records to be stored, got %d", len(queriedInbound))
+		}
+		if len(queriedOutbound) != 2 {
+			t.Errorf("query expected 2 outbound records to be stored, got %d", len(queriedOutbound))
+		}
+		expected := &BatchState{
+			BatchSize:      2,
+			BatchesEmitted: 2,
+		}
+		if diff := cmp.Diff(expected, queriedState); diff != "" {
+			t.Error("unexpected state after query")
+			t.Error(diff)
+		}
 	})
-	outboundEventReader := NewOutboundEventReader()
-	outboundEventReader.Add(BatchOutput{}.EventName(), func(item map[string]*dynamodb.AttributeValue) (OutboundEvent, error) {
-		var event BatchOutput
-		err := dynamodbattribute.UnmarshalMap(item, &event)
-		return event, err
+
+	t.Run("the state can be verified by reprocessing the queried inbound events", func(t *testing.T) {
+		recalculatedState := NewBatchState()
+		var recalculatedOutbound []OutboundEvent
+		for i := 0; i < len(queriedInbound); i++ {
+			recalculatedOutbound = append(recalculatedOutbound, recalculatedState.Process(queriedInbound[i])...)
+		}
+		if diff := cmp.Diff(queriedState, recalculatedState); diff != "" {
+			t.Error("unexpected state after recalculation")
+			t.Error(diff)
+		}
+		if diff := cmp.Diff(queriedOutbound, recalculatedOutbound); diff != "" {
+			t.Error("unexpected outbound events")
+			t.Error(diff)
+		}
 	})
-	sequence, inbound, outbound, err := s.Query("id", queriedState, inboundEventReader, outboundEventReader)
-	if sequence != 1 {
-		t.Errorf("query expected sequence of 1, got %d", sequence)
-	}
-	if len(inbound) != 4 {
-		t.Errorf("query expected 4 inbound records to be stored, got %d", len(inbound))
-	}
-	if len(outbound) != 2 {
-		t.Errorf("query expected 2 outbound records to be stored, got %d", len(outbound))
-	}
-	if diff := cmp.Diff(expected, queriedState); diff != "" {
-		t.Error("unexpected state after query")
-		t.Error(diff)
-	}
+
+	t.Run("the state can be overwritten if required, e.g. by reprocessing InboundEvent records if Process function logic has changed", func(t *testing.T) {
+		overwriteStateWith := NewBatchState()
+		overwriteStateWith.Values = []int{6, 5, 4}
+		newOutbound := []OutboundEvent{
+			&BatchOutput{Numbers: []int{6, 5, 4}},
+		}
+		// Don't pass any inbound events.
+		// This code is an example of how it's possible to make a change to the state,
+		// and send an arbitrary oubound message. This might be required in the case of
+		// repairing state data after fixing a production bug.
+		err := s.Put("id", 1, overwriteStateWith, nil, newOutbound)
+		if err != nil {
+			t.Fatalf("failed to overwrite state: %v", err)
+		}
+		getState := NewBatchState()
+		seq, err := s.Get("id", getState)
+		if err != nil {
+			t.Fatalf("failed to get state: %v", err)
+		}
+		if seq != 2 {
+			t.Errorf("expected overwritten state to increment the sequence number, but got sequence: %d", seq)
+		}
+		if diff := cmp.Diff(overwriteStateWith, getState); diff != "" {
+			t.Error("unexpected state after overwrite")
+			t.Error(diff)
+		}
+	})
 }
