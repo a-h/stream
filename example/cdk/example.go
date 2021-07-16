@@ -4,7 +4,9 @@ import (
 	"github.com/aws/aws-cdk-go/awscdk"
 	"github.com/aws/aws-cdk-go/awscdk/awsapigateway"
 	"github.com/aws/aws-cdk-go/awscdk/awsdynamodb"
+	"github.com/aws/aws-cdk-go/awscdk/awsevents"
 	"github.com/aws/aws-cdk-go/awscdk/awslambda"
+	"github.com/aws/aws-cdk-go/awscdk/awslambdaeventsources"
 	"github.com/aws/aws-cdk-go/awscdk/awss3assets"
 	"github.com/aws/constructs-go/constructs/v3"
 	"github.com/aws/jsii-runtime-go"
@@ -34,7 +36,30 @@ func NewExampleStack(scope constructs.Construct, id string, props *ExampleStackP
 		PartitionKey: &awsdynamodb.Attribute{Name: jsii.String("_pk"), Type: awsdynamodb.AttributeType_STRING},
 		SortKey:      &awsdynamodb.Attribute{Name: jsii.String("_sk"), Type: awsdynamodb.AttributeType_STRING},
 		BillingMode:  awsdynamodb.BillingMode_PAY_PER_REQUEST,
+		Stream:       awsdynamodb.StreamViewType_NEW_IMAGE,
 	})
+
+	// Create an event bus.
+	eventBus := awsevents.NewEventBus(stack, jsii.String("slotMachineEventBus"), &awsevents.EventBusProps{
+		EventBusName: jsii.String("slotMachineEventBus"),
+	})
+
+	// Process streams.
+	streamHandler := awslambda.NewFunction(stack, jsii.String("streamHandler"), &awslambda.FunctionProps{
+		Runtime: awslambda.Runtime_GO_1_X(),
+		Handler: jsii.String("lambdaHandler"),
+		Code:    awslambda.Code_FromAsset(jsii.String("../api/streamhandler/"), &awss3assets.AssetOptions{}),
+		Environment: &map[string]*string{
+			"EVENT_BUS_NAME":    eventBus.EventBusName(),
+			"EVENT_SOURCE_NAME": jsii.String("slot-machine"),
+		},
+	})
+	slotMachineTable.GrantReadData(streamHandler)
+	eventBus.GrantPutEventsTo(streamHandler)
+	streamHandler.AddEventSource(awslambdaeventsources.NewDynamoEventSource(slotMachineTable, &awslambdaeventsources.DynamoEventSourceProps{
+		StartingPosition: awslambda.StartingPosition_LATEST,
+		Enabled:          jsii.Bool(true),
+	}))
 
 	// POST /machine/id/insertCoin handler.
 	insertCoinPost := awslambda.NewFunction(stack, jsii.String("insertCoinHandler"), &awslambda.FunctionProps{

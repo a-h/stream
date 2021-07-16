@@ -1,4 +1,4 @@
-package main
+package handler
 
 import (
 	"context"
@@ -20,7 +20,7 @@ var eventBridge = eventbridge.New(sess)
 var eventBusName = os.Getenv("EVENT_BUS_NAME")
 var eventSourceName = os.Getenv("EVENT_SOURCE_NAME")
 
-func main() {
+func Start() {
 	var err error
 	log, err = zap.NewProduction()
 	if err != nil {
