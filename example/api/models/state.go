@@ -20,16 +20,16 @@ var ErrCannotInsertCoin = errors.New("cannot insert coin")
 var ErrCannotPullHandle = errors.New("cannot pull handle")
 
 type SlotMachine struct {
-	ID      string
-	Balance int
+	ID      string `json:"id"`
+	Balance int    `json:"balance"`
 	// How much is paid out if you win.
-	Payout int
+	Payout int `json:"payout"`
 	// How likely you are to get paid out.
-	WinChance    float64
-	Games        int
-	Wins         int
-	Losses       int
-	IsCoinInSlot bool
+	WinChance    float64 `json:"winChance"`
+	Games        int     `json:"games"`
+	Wins         int     `json:"wins"`
+	Losses       int     `json:"losses"`
+	IsCoinInSlot bool    `json:"isCoinInSlot"`
 }
 
 func (s *SlotMachine) Process(event stream.InboundEvent) (outbound []stream.OutboundEvent, err error) {
@@ -99,7 +99,7 @@ func (_ InsertCoin) EventName() string { return "InsertCoin" }
 func (_ InsertCoin) IsInbound()        {}
 
 type PullHandle struct {
-	UserID string
+	UserID string `json:"userId"`
 }
 
 func (_ PullHandle) EventName() string { return "PullHandle" }
@@ -107,16 +107,16 @@ func (_ PullHandle) IsInbound()        {}
 
 // Output events.
 type GameResult struct {
-	MachineID string
-	Win       bool
+	MachineID string `json:"machineId"`
+	Win       bool   `json:"win"`
 }
 
 func (_ GameResult) EventName() string { return "GameResult" }
 func (_ GameResult) IsOutbound()       {}
 
 type Payout struct {
-	UserID string
-	Amount int
+	UserID string `json:"userId"`
+	Amount int    `json:"amount"`
 }
 
 func (_ Payout) EventName() string { return "Payout" }
