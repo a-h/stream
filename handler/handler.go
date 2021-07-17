@@ -42,7 +42,10 @@ func HandleRequest(ctx context.Context, event events.DynamoDBEvent) error {
 	log.Info("processing records", zap.Int("count", len(event.Records)))
 	var outboundEvents []*eventbridge.PutEventsRequestEntry
 	for i := 0; i < len(event.Records); i++ {
-		id, eventType, outboundEvent := createOutboundEvent(event.Records[i].Change.NewImage)
+		id, eventType, outboundEvent, err := createOutboundEvent(event.Records[i].Change.NewImage)
+		if err != nil {
+			return err
+		}
 		if outboundEvent == nil {
 			continue
 		}
@@ -66,7 +69,7 @@ func HandleRequest(ctx context.Context, event events.DynamoDBEvent) error {
 	return nil
 }
 
-func createOutboundEvent(r map[string]events.DynamoDBAttributeValue) (id, eventType string, e *eventbridge.PutEventsRequestEntry) {
+func createOutboundEvent(r map[string]events.DynamoDBAttributeValue) (id, eventType string, e *eventbridge.PutEventsRequestEntry, err error) {
 	pkField, ok := r["_pk"]
 	if !ok {
 		return
@@ -90,7 +93,11 @@ func createOutboundEvent(r map[string]events.DynamoDBAttributeValue) (id, eventT
 		delete(r, keysToDelete[i])
 	}
 	// Strip type data.
-	m := stripDynamoDBTypesFromMap(r)
+	m, err := stripDynamoDBTypesFromMap(r)
+	if err != nil {
+		err = fmt.Errorf("could not strip dynamodb type information from record: %v", err)
+		return
+	}
 	// Get JSON.
 	detailJSON, err := json.Marshal(m)
 	if err != nil {
@@ -107,31 +114,37 @@ func createOutboundEvent(r map[string]events.DynamoDBAttributeValue) (id, eventT
 	return
 }
 
-func stripDynamoDBTypesFromMap(m map[string]events.DynamoDBAttributeValue) map[string]interface{} {
-	op := map[string]interface{}{}
+func stripDynamoDBTypesFromMap(m map[string]events.DynamoDBAttributeValue) (op map[string]interface{}, err error) {
+	op = make(map[string]interface{})
 	for k := range m {
 		k := k
-		op[k] = getAttributeValue(m[k])
+		op[k], err = getAttributeValue(m[k])
+		if err != nil {
+			return
+		}
 	}
-	return op
+	return
 }
 
-func stripDynamoDBTypesFromList(list []events.DynamoDBAttributeValue) []interface{} {
-	op := make([]interface{}, len(list))
+func stripDynamoDBTypesFromList(list []events.DynamoDBAttributeValue) (op []interface{}, err error) {
+	op = make([]interface{}, len(list))
 	for i := 0; i < len(list); i++ {
-		op[i] = getAttributeValue(list[i])
+		op[i], err = getAttributeValue(list[i])
+		if err != nil {
+			return
+		}
 	}
-	return op
+	return
 }
 
-func getAttributeValue(av events.DynamoDBAttributeValue) interface{} {
+func getAttributeValue(av events.DynamoDBAttributeValue) (interface{}, error) {
 	switch av.DataType() {
 	case events.DataTypeBinary:
-		return av.Binary()
+		return av.Binary(), nil
 	case events.DataTypeBoolean:
-		return av.Boolean()
+		return av.Boolean(), nil
 	case events.DataTypeBinarySet:
-		return av.BinarySet()
+		return av.BinarySet(), nil
 	case events.DataTypeList:
 		return stripDynamoDBTypesFromList(av.List())
 	case events.DataTypeMap:
@@ -139,30 +152,29 @@ func getAttributeValue(av events.DynamoDBAttributeValue) interface{} {
 	case events.DataTypeNumber:
 		return getNumber(av.Number())
 	case events.DataTypeNumberSet:
-		return av.NumberSet()
+		return av.NumberSet(), nil
 	case events.DataTypeNull:
-		return nil
+		return nil, nil
 	case events.DataTypeString:
-		return av.String()
+		return av.String(), nil
 	case events.DataTypeStringSet:
-		return av.StringSet()
-	default:
-		panic(fmt.Sprintf("unknown DynamoDBAttributeValue type: %v", reflect.TypeOf(av.DataType())))
+		return av.StringSet(), nil
 	}
+	return nil, fmt.Errorf("unknown DynamoDBAttributeValue type: %v", reflect.TypeOf(av.DataType()))
 }
 
-func getNumber(s string) interface{} {
+func getNumber(s string) (interface{}, error) {
 	// First try integer.
 	i, err := strconv.ParseInt(s, 10, 64)
 	if err == nil {
-		return i
+		return i, err
 	}
 	// Then float.
 	f, err := strconv.ParseFloat(s, 64)
 	if err == nil {
-		return f
+		return f, err
 	}
-	panic(fmt.Sprintf("cannot get number from %q", s))
+	return nil, fmt.Errorf("cannot parse %q as int64 or float64", s)
 }
 
 func batch(values []*eventbridge.PutEventsRequestEntry, n int) (pages [][]*eventbridge.PutEventsRequestEntry) {

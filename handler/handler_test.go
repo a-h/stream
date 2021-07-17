@@ -71,7 +71,10 @@ func TestStripDynamoDBTypes(t *testing.T) {
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			actual := stripDynamoDBTypesFromMap(tt.input)
+			actual, err := stripDynamoDBTypesFromMap(tt.input)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if diff := cmp.Diff(tt.expected, actual); diff != "" {
 				t.Error(diff)
 			}
