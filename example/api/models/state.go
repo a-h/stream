@@ -13,6 +13,7 @@ func NewSlotMachine(id string) *SlotMachine {
 		Balance:   0,
 		Payout:    4,
 		WinChance: 0.18,
+		Win:       func(chance float64) bool { return rand.Float64() <= chance },
 	}
 }
 
@@ -30,6 +31,7 @@ type SlotMachine struct {
 	Wins         int     `json:"wins"`
 	Losses       int     `json:"losses"`
 	IsCoinInSlot bool    `json:"isCoinInSlot"`
+	Win          func(chance float64) bool
 }
 
 func (s *SlotMachine) Process(event stream.InboundEvent) (outbound []stream.OutboundEvent, err error) {
@@ -45,6 +47,7 @@ func (s *SlotMachine) Process(event stream.InboundEvent) (outbound []stream.Outb
 		win, ok := s.PullHandle()
 		if !ok {
 			err = ErrCannotPullHandle
+			return
 		}
 		outbound = append(outbound, GameResult{
 			MachineID: s.ID,
@@ -77,7 +80,7 @@ func (s *SlotMachine) PullHandle() (win bool, ok bool) {
 	s.IsCoinInSlot = false
 
 	// See if we win.
-	win = rand.Float64() <= s.WinChance
+	win = s.Win(s.WinChance)
 
 	// Update the stats.
 	s.Games++
