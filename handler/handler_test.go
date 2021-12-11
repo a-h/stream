@@ -1,10 +1,16 @@
 package handler
 
 import (
+	"context"
 	"testing"
 
 	"github.com/aws/aws-lambda-go/events"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/service/eventbridge"
+	"github.com/aws/aws-sdk-go/service/eventbridge/eventbridgeiface"
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/uuid"
+	"go.uber.org/zap"
 )
 
 func TestStripDynamoDBTypes(t *testing.T) {
@@ -79,5 +85,76 @@ func TestStripDynamoDBTypes(t *testing.T) {
 				t.Error(diff)
 			}
 		})
+	}
+}
+
+type mockEventBridge struct {
+	eventbridgeiface.EventBridgeAPI
+	input *eventbridge.PutEventsInput
+}
+
+func (m mockEventBridge) PutEvents(input *eventbridge.PutEventsInput) (*eventbridge.PutEventsOutput, error) {
+	*m.input = *input
+	return &eventbridge.PutEventsOutput{FailedEntryCount: aws.Int64(0)}, nil
+}
+
+func TestOnlyOutboundTypeEventsAreEmitted(t *testing.T) {
+	var input eventbridge.PutEventsInput
+	eventBridge = mockEventBridge{input: &input}
+	log = zap.NewNop()
+	pk := uuid.NewString()
+	outbound := events.DynamoDBEventRecord{
+		Change: events.DynamoDBStreamRecord{
+			NewImage: map[string]events.DynamoDBAttributeValue{
+				"_pk":      events.NewStringAttribute(pk),
+				"_typ":     events.NewStringAttribute("CounterUpdated"),
+				"_sk":      events.NewStringAttribute("OUTBOUND/CounterUpdated/1/0"),
+				"newCount": events.NewNumberAttribute("1"),
+				"oldCount": events.NewNumberAttribute("0"),
+			},
+		},
+	}
+	inbound := events.DynamoDBEventRecord{
+		Change: events.DynamoDBStreamRecord{
+			NewImage: map[string]events.DynamoDBAttributeValue{
+				"_pk":    events.NewStringAttribute(pk),
+				"_typ":   events.NewStringAttribute("IncrementCounter"),
+				"_sk":    events.NewStringAttribute("INBOUND/IncrementCounter/1"),
+				"amount": events.NewNumberAttribute("1"),
+			},
+		},
+	}
+	state := events.DynamoDBEventRecord{
+		Change: events.DynamoDBStreamRecord{
+			NewImage: map[string]events.DynamoDBAttributeValue{
+				"_pk":   events.NewStringAttribute(pk),
+				"_typ":  events.NewStringAttribute("Counter"),
+				"_sk":   events.NewStringAttribute("STATE"),
+				"count": events.NewNumberAttribute("1"),
+			},
+		},
+	}
+	event := events.DynamoDBEvent{
+		Records: []events.DynamoDBEventRecord{
+			inbound,
+			outbound,
+			state,
+		},
+	}
+	err := HandleRequest(context.Background(), event)
+	if err != nil {
+		t.Fatal("failed to handle request: ", err.Error())
+	}
+	if len(input.Entries) != 1 {
+		t.Fatalf("expected 1 event entry, got %v: %#v", len(input.Entries), input.Entries)
+	}
+	expected := &eventbridge.PutEventsRequestEntry{
+		DetailType:   aws.String("CounterUpdated"),
+		Detail:       aws.String(`{"newCount":1,"oldCount":0}`),
+		EventBusName: aws.String(""),
+		Source:       aws.String(""),
+	}
+	if diff := cmp.Diff(expected, input.Entries[0]); diff != "" {
+		t.Fatalf("unexpected event emitted: " + diff)
 	}
 }

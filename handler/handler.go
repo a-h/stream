@@ -13,12 +13,13 @@ import (
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/eventbridge"
+	"github.com/aws/aws-sdk-go/service/eventbridge/eventbridgeiface"
 	"go.uber.org/zap"
 )
 
 var log *zap.Logger
 var sess = session.Must(session.NewSession())
-var eventBridge = eventbridge.New(sess)
+var eventBridge eventbridgeiface.EventBridgeAPI = eventbridge.New(sess)
 var eventBusName = os.Getenv("EVENT_BUS_NAME")
 var eventSourceName = os.Getenv("EVENT_SOURCE_NAME")
 
@@ -75,6 +76,14 @@ func createOutboundEvent(r map[string]events.DynamoDBAttributeValue) (id, eventT
 		return
 	}
 	id = pkField.String()
+	skField, ok := r["_sk"]
+	if !ok {
+		return
+	}
+	sk := skField.String()
+	if !strings.HasPrefix(sk, "OUTBOUND/") {
+		return
+	}
 	typ, ok := r["_typ"]
 	if !ok {
 		return
