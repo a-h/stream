@@ -3,8 +3,8 @@ package stream
 import (
 	"testing"
 
-	"github.com/aws/aws-sdk-go/service/dynamodb"
-	"github.com/aws/aws-sdk-go/service/dynamodb/dynamodbattribute"
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -210,15 +210,15 @@ func TestProcessorIntegration(t *testing.T) {
 	var queriedOutbound []OutboundEvent
 	t.Run("it is possible to query the state, inbound and outbound events", func(t *testing.T) {
 		inboundEventReader := NewInboundEventReader()
-		inboundEventReader.Add(BatchInput{}.EventName(), func(item map[string]*dynamodb.AttributeValue) (InboundEvent, error) {
+		inboundEventReader.Add(BatchInput{}.EventName(), func(item map[string]types.AttributeValue) (InboundEvent, error) {
 			var event BatchInput
-			err := dynamodbattribute.UnmarshalMap(item, &event)
+			err := attributevalue.UnmarshalMap(item, &event)
 			return event, err
 		})
 		outboundEventReader := NewOutboundEventReader()
-		outboundEventReader.Add(BatchOutput{}.EventName(), func(item map[string]*dynamodb.AttributeValue) (OutboundEvent, error) {
+		outboundEventReader.Add(BatchOutput{}.EventName(), func(item map[string]types.AttributeValue) (OutboundEvent, error) {
 			var event BatchOutput
-			err := dynamodbattribute.UnmarshalMap(item, &event)
+			err := attributevalue.UnmarshalMap(item, &event)
 			return event, err
 		})
 		queriedSequence, queriedInbound, queriedOutbound, err = s.Query("id", queriedState, inboundEventReader, outboundEventReader)

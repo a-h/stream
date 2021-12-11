@@ -5,9 +5,9 @@ import (
 	"testing"
 
 	"github.com/aws/aws-lambda-go/events"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/eventbridge"
-	"github.com/aws/aws-sdk-go/service/eventbridge/eventbridgeiface"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
+	"github.com/aws/aws-sdk-go-v2/service/eventbridge/types"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -89,18 +89,17 @@ func TestStripDynamoDBTypes(t *testing.T) {
 }
 
 type mockEventBridge struct {
-	eventbridgeiface.EventBridgeAPI
 	input *eventbridge.PutEventsInput
 }
 
-func (m mockEventBridge) PutEvents(input *eventbridge.PutEventsInput) (*eventbridge.PutEventsOutput, error) {
+func (m mockEventBridge) PutEvents(_ context.Context, input *eventbridge.PutEventsInput, _ ...func(*eventbridge.Options)) (*eventbridge.PutEventsOutput, error) {
 	*m.input = *input
-	return &eventbridge.PutEventsOutput{FailedEntryCount: aws.Int64(0)}, nil
+	return &eventbridge.PutEventsOutput{}, nil
 }
 
 func TestOnlyOutboundTypeEventsAreEmitted(t *testing.T) {
 	var input eventbridge.PutEventsInput
-	eventBridge = mockEventBridge{input: &input}
+	eventBridge = mockEventBridge{&input}
 	log = zap.NewNop()
 	pk := uuid.NewString()
 	outbound := events.DynamoDBEventRecord{
@@ -148,13 +147,13 @@ func TestOnlyOutboundTypeEventsAreEmitted(t *testing.T) {
 	if len(input.Entries) != 1 {
 		t.Fatalf("expected 1 event entry, got %v: %#v", len(input.Entries), input.Entries)
 	}
-	expected := &eventbridge.PutEventsRequestEntry{
+	expected := types.PutEventsRequestEntry{
 		DetailType:   aws.String("CounterUpdated"),
 		Detail:       aws.String(`{"newCount":1,"oldCount":0}`),
 		EventBusName: aws.String(""),
 		Source:       aws.String(""),
 	}
-	if diff := cmp.Diff(expected, input.Entries[0]); diff != "" {
+	if diff := cmp.Diff(expected, input.Entries[0], cmp.AllowUnexported(types.PutEventsRequestEntry{})); diff != "" {
 		t.Fatalf("unexpected event emitted: " + diff)
 	}
 }

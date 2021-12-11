@@ -1,6 +1,7 @@
 package stream
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"reflect"
@@ -8,27 +9,27 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/awserr"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/dynamodb"
-	"github.com/aws/aws-sdk-go/service/dynamodb/dynamodbattribute"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
 // ErrStateNotFound is returned if the state is not found.
 var ErrStateNotFound = errors.New("state not found")
 var ErrOptimisticConcurrency = errors.New("state has been updated since it was read, try again")
 
-var sess *session.Session
-var client *dynamodb.DynamoDB
+var cfg aws.Config
+var client *dynamodb.Client
 var initErr error
 
 func init() {
-	sess, initErr = session.NewSession()
+	cfg, initErr = config.LoadDefaultConfig(context.Background())
 	if initErr != nil {
 		return
 	}
-	client = dynamodb.New(sess)
+	client = dynamodb.NewFromConfig(cfg)
 }
 
 // NewStore creates a new store using default config.
@@ -50,12 +51,12 @@ func NewStore(tableName, namespace string) (s *DynamoDBStore, err error) {
 
 // NewStoreWithConfig creates a new store with custom config.
 func NewStoreWithConfig(region, tableName, namespace string) (s *DynamoDBStore, err error) {
-	sess, err := session.NewSession(&aws.Config{Region: aws.String(region)})
+	cfg, err := config.LoadDefaultConfig(context.Background(), config.WithRegion(region))
 	if err != nil {
 		return
 	}
 	s = &DynamoDBStore{
-		Client:    dynamodb.New(sess),
+		Client:    dynamodb.NewFromConfig(cfg),
 		TableName: aws.String(tableName),
 		Now: func() time.Time {
 			return time.Now().UTC()
@@ -67,7 +68,7 @@ func NewStoreWithConfig(region, tableName, namespace string) (s *DynamoDBStore, 
 
 // DynamoDBStore is a DynamoDB implementation of the Store interface.
 type DynamoDBStore struct {
-	Client    *dynamodb.DynamoDB
+	Client    *dynamodb.Client
 	TableName *string
 	Now       func() time.Time
 	Namespace string
@@ -79,12 +80,12 @@ func (ddb *DynamoDBStore) Get(id string, state State) (sequence int64, err error
 		err = errors.New("the state parameter must be a pointer")
 		return
 	}
-	gio, err := ddb.Client.GetItem(&dynamodb.GetItemInput{
+	gio, err := ddb.Client.GetItem(context.Background(), &dynamodb.GetItemInput{
 		TableName:      ddb.TableName,
 		ConsistentRead: aws.Bool(true),
-		Key: map[string]*dynamodb.AttributeValue{
-			"_pk": ddb.attributeValueString(ddb.createPartitionKey(id)),
-			"_sk": ddb.attributeValueString(ddb.createStateRecordSortKey()),
+		Key: map[string]types.AttributeValue{
+			"_pk": &types.AttributeValueMemberS{Value: ddb.createPartitionKey(id)},
+			"_sk": &types.AttributeValueMemberS{Value: ddb.createStateRecordSortKey()},
 		},
 	})
 	if err != nil {
@@ -94,7 +95,7 @@ func (ddb *DynamoDBStore) Get(id string, state State) (sequence int64, err error
 		err = ErrStateNotFound
 		return
 	}
-	err = dynamodbattribute.UnmarshalMap(gio.Item, state)
+	err = attributevalue.UnmarshalMap(gio.Item, state)
 	if err != nil {
 		return
 	}
@@ -115,27 +116,30 @@ func (ddb *DynamoDBStore) Put(id string, atSequence int64, state State, inbound 
 	if err != nil {
 		return err
 	}
-	var items []*dynamodb.TransactWriteItem
+	var items []types.TransactWriteItem
 	items = append(items, stwi)
 	items = append(items, itwi...)
 	items = append(items, otwi...)
-	_, err = ddb.Client.TransactWriteItems(&dynamodb.TransactWriteItemsInput{
+	_, err = ddb.Client.TransactWriteItems(context.Background(), &dynamodb.TransactWriteItemsInput{
 		TransactItems: items,
 	})
 	if err != nil {
-		if aerr, ok := err.(awserr.Error); ok {
-			if strings.Contains(aerr.Message(), "ConditionalCheckFailed") {
-				return ErrOptimisticConcurrency
+		var transactionCanceled *types.TransactionCanceledException
+		if errors.As(err, &transactionCanceled) {
+			for _, reason := range transactionCanceled.CancellationReasons {
+				if *reason.Code == "ConditionalCheckFailed" {
+					return ErrOptimisticConcurrency
+				}
 			}
 		}
 	}
 	return err
 }
 
-func (ddb *DynamoDBStore) createInboundTransactWriteItems(id string, atSequence int64, inbound []InboundEvent) (puts []*dynamodb.TransactWriteItem, err error) {
-	puts = make([]*dynamodb.TransactWriteItem, len(inbound))
+func (ddb *DynamoDBStore) createInboundTransactWriteItems(id string, atSequence int64, inbound []InboundEvent) (puts []types.TransactWriteItem, err error) {
+	puts = make([]types.TransactWriteItem, len(inbound))
 	for i := 0; i < len(inbound); i++ {
-		var item map[string]*dynamodb.AttributeValue
+		var item map[string]types.AttributeValue
 		item, err = ddb.createRecord(id,
 			ddb.createInboundRecordSortKey(inbound[i].EventName(), atSequence+int64(i+1)),
 			atSequence+int64(i+1),
@@ -149,10 +153,10 @@ func (ddb *DynamoDBStore) createInboundTransactWriteItems(id string, atSequence 
 	return
 }
 
-func (ddb *DynamoDBStore) createOutboundTransactWriteItems(id string, atSequence int64, outbound []OutboundEvent) (puts []*dynamodb.TransactWriteItem, err error) {
-	puts = make([]*dynamodb.TransactWriteItem, len(outbound))
+func (ddb *DynamoDBStore) createOutboundTransactWriteItems(id string, atSequence int64, outbound []OutboundEvent) (puts []types.TransactWriteItem, err error) {
+	puts = make([]types.TransactWriteItem, len(outbound))
 	for i := 0; i < len(outbound); i++ {
-		var item map[string]*dynamodb.AttributeValue
+		var item map[string]types.AttributeValue
 		item, err = ddb.createRecord(id,
 			ddb.createOutboundRecordSortKey(outbound[i].EventName(), atSequence+1, i),
 			atSequence+int64(i+1),
@@ -166,34 +170,34 @@ func (ddb *DynamoDBStore) createOutboundTransactWriteItems(id string, atSequence
 	return
 }
 
-func (ddb *DynamoDBStore) createPut(item map[string]*dynamodb.AttributeValue) *dynamodb.TransactWriteItem {
-	return &dynamodb.TransactWriteItem{
-		Put: &dynamodb.Put{
+func (ddb *DynamoDBStore) createPut(item map[string]types.AttributeValue) types.TransactWriteItem {
+	return types.TransactWriteItem{
+		Put: &types.Put{
 			TableName:           ddb.TableName,
 			Item:                item,
 			ConditionExpression: aws.String("attribute_not_exists(#_pk)"),
-			ExpressionAttributeNames: map[string]*string{
-				"#_pk": aws.String("_pk"),
+			ExpressionAttributeNames: map[string]string{
+				"#_pk": "_pk",
 			},
 		},
 	}
 }
 
-func (ddb *DynamoDBStore) createStateTransactWriteItem(id string, atSequence int64, state State) (twi *dynamodb.TransactWriteItem, err error) {
+func (ddb *DynamoDBStore) createStateTransactWriteItem(id string, atSequence int64, state State) (twi types.TransactWriteItem, err error) {
 	item, err := ddb.createRecord(id, ddb.createStateRecordSortKey(), atSequence+1, state, ddb.Namespace)
 	if err != nil {
 		return
 	}
-	twi = &dynamodb.TransactWriteItem{
-		Put: &dynamodb.Put{
+	twi = types.TransactWriteItem{
+		Put: &types.Put{
 			TableName:           ddb.TableName,
 			Item:                item,
 			ConditionExpression: aws.String("attribute_not_exists(#_pk) OR #_seq = :_seq"),
-			ExpressionAttributeNames: map[string]*string{
-				"#_pk":  aws.String("_pk"),
-				"#_seq": aws.String("_seq"),
+			ExpressionAttributeNames: map[string]string{
+				"#_pk":  "_pk",
+				"#_seq": "_seq",
 			},
-			ExpressionAttributeValues: map[string]*dynamodb.AttributeValue{
+			ExpressionAttributeValues: map[string]types.AttributeValue{
 				":_seq": ddb.attributeValueInteger(int64(atSequence)),
 			},
 		},
@@ -217,17 +221,17 @@ func (ddb *DynamoDBStore) createOutboundRecordSortKey(typeName string, sequence 
 	return fmt.Sprintf(`OUTBOUND/%s/%d/%d`, typeName, sequence, index)
 }
 
-func (ddb *DynamoDBStore) attributeValueString(v string) *dynamodb.AttributeValue {
-	return &dynamodb.AttributeValue{S: &v}
+func (ddb *DynamoDBStore) attributeValueString(v string) types.AttributeValue {
+	return &types.AttributeValueMemberS{Value: v}
 }
 
-func (ddb *DynamoDBStore) attributeValueInteger(i int64) *dynamodb.AttributeValue {
+func (ddb *DynamoDBStore) attributeValueInteger(i int64) types.AttributeValue {
 	v := strconv.FormatInt(i, 10)
-	return &dynamodb.AttributeValue{N: &v}
+	return &types.AttributeValueMemberN{Value: v}
 }
 
-func (ddb *DynamoDBStore) createRecord(id, sk string, sequence int64, item interface{}, recordName string) (record map[string]*dynamodb.AttributeValue, err error) {
-	record, err = dynamodbattribute.MarshalMap(item)
+func (ddb *DynamoDBStore) createRecord(id, sk string, sequence int64, item interface{}, recordName string) (record map[string]types.AttributeValue, err error) {
+	record, err = attributevalue.MarshalMap(item)
 	if err != nil {
 		err = fmt.Errorf("error marshalling item to map: %w", err)
 		return
@@ -242,47 +246,49 @@ func (ddb *DynamoDBStore) createRecord(id, sk string, sequence int64, item inter
 	return
 }
 
-func (ddb *DynamoDBStore) getRecordSequenceNumber(r map[string]*dynamodb.AttributeValue) (sequence int64, err error) {
-	v, ok := r["_seq"]
+func (ddb *DynamoDBStore) getRecordSequenceNumber(r map[string]types.AttributeValue) (sequence int64, err error) {
+	a, ok := r["_seq"]
 	if !ok {
 		return sequence, fmt.Errorf("missing _seq field in record")
 	}
-	if v.N == nil {
+	v, ok := a.(*types.AttributeValueMemberN)
+	if !ok {
 		return sequence, fmt.Errorf("null _seq field in record")
 	}
-	sequence, err = strconv.ParseInt(*v.N, 10, 64)
+	sequence, err = strconv.ParseInt(v.Value, 10, 64)
 	if err != nil {
 		return sequence, fmt.Errorf("invalid _seq field in record: %w", err)
 	}
 	return
 }
 
-func (ddb *DynamoDBStore) getRecordType(r map[string]*dynamodb.AttributeValue) (typ string, err error) {
-	v, ok := r["_typ"]
+func (ddb *DynamoDBStore) getRecordType(r map[string]types.AttributeValue) (typ string, err error) {
+	a, ok := r["_typ"]
 	if !ok {
 		return "", fmt.Errorf("missing _typ field in record")
 	}
-	if v.S == nil {
+	v, ok := a.(*types.AttributeValueMemberS)
+	if !ok {
 		return "", fmt.Errorf("null _typ field in record")
 	}
-	return *v.S, nil
+	return v.Value, nil
 }
 
 func NewInboundEventReader() *InboundEventReader {
 	return &InboundEventReader{
-		readers: make(map[string]func(item map[string]*dynamodb.AttributeValue) (InboundEvent, error), 0),
+		readers: make(map[string]func(item map[string]types.AttributeValue) (InboundEvent, error), 0),
 	}
 }
 
 type InboundEventReader struct {
-	readers map[string]func(item map[string]*dynamodb.AttributeValue) (InboundEvent, error)
+	readers map[string]func(item map[string]types.AttributeValue) (InboundEvent, error)
 }
 
-func (r *InboundEventReader) Add(eventName string, f func(item map[string]*dynamodb.AttributeValue) (InboundEvent, error)) {
+func (r *InboundEventReader) Add(eventName string, f func(item map[string]types.AttributeValue) (InboundEvent, error)) {
 	r.readers[eventName] = f
 }
 
-func (r *InboundEventReader) Read(eventName string, item map[string]*dynamodb.AttributeValue) (e InboundEvent, ok bool, err error) {
+func (r *InboundEventReader) Read(eventName string, item map[string]types.AttributeValue) (e InboundEvent, ok bool, err error) {
 	f, ok := r.readers[eventName]
 	if !ok {
 		return
@@ -293,24 +299,37 @@ func (r *InboundEventReader) Read(eventName string, item map[string]*dynamodb.At
 
 func NewOutboundEventReader() *OutboundEventReader {
 	return &OutboundEventReader{
-		readers: make(map[string]func(item map[string]*dynamodb.AttributeValue) (OutboundEvent, error), 0),
+		readers: make(map[string]func(item map[string]types.AttributeValue) (OutboundEvent, error), 0),
 	}
 }
 
 type OutboundEventReader struct {
-	readers map[string]func(item map[string]*dynamodb.AttributeValue) (OutboundEvent, error)
+	readers map[string]func(item map[string]types.AttributeValue) (OutboundEvent, error)
 }
 
-func (r *OutboundEventReader) Add(eventName string, f func(item map[string]*dynamodb.AttributeValue) (OutboundEvent, error)) {
+func (r *OutboundEventReader) Add(eventName string, f func(item map[string]types.AttributeValue) (OutboundEvent, error)) {
 	r.readers[eventName] = f
 }
 
-func (r *OutboundEventReader) Read(eventName string, item map[string]*dynamodb.AttributeValue) (e OutboundEvent, ok bool, err error) {
+func (r *OutboundEventReader) Read(eventName string, item map[string]types.AttributeValue) (e OutboundEvent, ok bool, err error) {
 	f, ok := r.readers[eventName]
 	if !ok {
 		return
 	}
 	e, err = f(item)
+	return
+}
+
+func (ddb *DynamoDBStore) queryPages(qi *dynamodb.QueryInput, pager func(*dynamodb.QueryOutput, bool) bool) (err error) {
+	pages := dynamodb.NewQueryPaginator(ddb.Client, qi)
+	for carryOn := pages.HasMorePages(); carryOn; {
+		var page *dynamodb.QueryOutput
+		page, err = pages.NextPage(context.Background())
+		if err != nil {
+			return err
+		}
+		carryOn = pager(page, pages.HasMorePages())
+	}
 	return
 }
 
@@ -324,22 +343,22 @@ func (ddb *DynamoDBStore) Query(id string, state State, inboundEventReader *Inbo
 		TableName:              ddb.TableName,
 		ConsistentRead:         aws.Bool(true),
 		KeyConditionExpression: aws.String("#_pk = :_pk"),
-		ExpressionAttributeNames: map[string]*string{
-			"#_pk": aws.String("_pk"),
+		ExpressionAttributeNames: map[string]string{
+			"#_pk": "_pk",
 		},
-		ExpressionAttributeValues: map[string]*dynamodb.AttributeValue{
+		ExpressionAttributeValues: map[string]types.AttributeValue{
 			":_pk": ddb.attributeValueString(ddb.createPartitionKey(id)),
 		},
 	}
 	var found bool
 	var pagerError error
-	pager := func(qo *dynamodb.QueryOutput, lastPage bool) (carryOn bool) {
+	pager := func(qo *dynamodb.QueryOutput, _ bool) (carryOn bool) {
 		for i := 0; i < len(qo.Items); i++ {
 			r := qo.Items[i]
 			switch ddb.getSortKeyPrefix(r) {
 			case "STATE":
 				found = true
-				pagerError = dynamodbattribute.UnmarshalMap(r, state)
+				pagerError = attributevalue.UnmarshalMap(r, state)
 				if pagerError != nil {
 					return false
 				}
@@ -383,7 +402,7 @@ func (ddb *DynamoDBStore) Query(id string, state State, inboundEventReader *Inbo
 		}
 		return true
 	}
-	err = ddb.Client.QueryPages(qi, pager)
+	err = ddb.queryPages(qi, pager)
 	if err != nil {
 		return
 	}
@@ -398,10 +417,14 @@ func (ddb *DynamoDBStore) Query(id string, state State, inboundEventReader *Inbo
 	return
 }
 
-func (ddb *DynamoDBStore) getSortKeyPrefix(item map[string]*dynamodb.AttributeValue) (prefix string) {
+func (ddb *DynamoDBStore) getSortKeyPrefix(item map[string]types.AttributeValue) (prefix string) {
 	sk, ok := item["_sk"]
-	if !ok || sk.S == nil {
-		return ""
+	if !ok {
+		return
 	}
-	return strings.SplitN(*sk.S, "/", 2)[0]
+	v, ok := sk.(*types.AttributeValueMemberS)
+	if ok {
+		return strings.SplitN(v.Value, "/", 2)[0]
+	}
+	return ""
 }
