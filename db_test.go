@@ -1,60 +1,59 @@
 package stream
 
 import (
+	"context"
 	"os"
 	"testing"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/google/uuid"
 )
 
 const region = "eu-west-1"
 
-var testClient *dynamodb.DynamoDB
+var testClient *dynamodb.Client
 
 func init() {
-	sess, err := session.NewSession(&aws.Config{
-		Region:      aws.String(region),
-		Credentials: credentials.NewStaticCredentials("fake", "accessKeyId", "secretKeyId"),
-	})
+	creds := credentials.NewStaticCredentialsProvider("fake", "accessKeyId", "secretKeyId")
+	cfg, err := config.LoadDefaultConfig(context.Background(), config.WithRegion(region), config.WithCredentialsProvider(creds))
 	if err != nil {
 		panic("can't create db_test session: " + err.Error())
 	}
-	testClient = dynamodb.New(sess)
 	endpoint := os.Getenv("DYNAMODB_ENDPOINT")
 	if endpoint == "" {
 		endpoint = "http://localhost:8000"
 	}
-	testClient.Endpoint = endpoint
+	testClient = dynamodb.NewFromConfig(cfg, dynamodb.WithEndpointResolver(dynamodb.EndpointResolverFromURL(endpoint)))
 }
 
 func createLocalTable(t *testing.T) (name string) {
 	name = uuid.New().String()
-	_, err := testClient.CreateTable(&dynamodb.CreateTableInput{
-		AttributeDefinitions: []*dynamodb.AttributeDefinition{
+	_, err := testClient.CreateTable(context.Background(), &dynamodb.CreateTableInput{
+		AttributeDefinitions: []types.AttributeDefinition{
 			{
 				AttributeName: aws.String("_pk"),
-				AttributeType: aws.String("S"),
+				AttributeType: types.ScalarAttributeTypeS,
 			},
 			{
 				AttributeName: aws.String("_sk"),
-				AttributeType: aws.String("S"),
+				AttributeType: types.ScalarAttributeTypeS,
 			},
 		},
-		KeySchema: []*dynamodb.KeySchemaElement{
+		KeySchema: []types.KeySchemaElement{
 			{
 				AttributeName: aws.String("_pk"),
-				KeyType:       aws.String("HASH"),
+				KeyType:       types.KeyTypeHash,
 			},
 			{
 				AttributeName: aws.String("_sk"),
-				KeyType:       aws.String("RANGE"),
+				KeyType:       types.KeyTypeRange,
 			},
 		},
-		BillingMode: aws.String(dynamodb.BillingModePayPerRequest),
+		BillingMode: types.BillingModePayPerRequest,
 		TableName:   aws.String(name),
 	})
 	if err != nil {
@@ -64,7 +63,7 @@ func createLocalTable(t *testing.T) (name string) {
 }
 
 func deleteLocalTable(t *testing.T, name string) {
-	_, err := testClient.DeleteTable(&dynamodb.DeleteTableInput{
+	_, err := testClient.DeleteTable(context.Background(), &dynamodb.DeleteTableInput{
 		TableName: aws.String(name),
 	})
 	if err != nil {

@@ -11,19 +11,27 @@ import (
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/eventbridge"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
+	"github.com/aws/aws-sdk-go-v2/service/eventbridge/types"
 	"go.uber.org/zap"
 )
 
+type eventBridgeAPI interface {
+	PutEvents(context.Context, *eventbridge.PutEventsInput, ...func(*eventbridge.Options)) (*eventbridge.PutEventsOutput, error)
+}
+
 var log *zap.Logger
-var sess = session.Must(session.NewSession())
-var eventBridge = eventbridge.New(sess)
+var eventBridge eventBridgeAPI
 var eventBusName = os.Getenv("EVENT_BUS_NAME")
 var eventSourceName = os.Getenv("EVENT_SOURCE_NAME")
 
 func Start() {
-	var err error
+	cfg, err := config.LoadDefaultConfig(context.Background())
+	if err != nil {
+		panic("unable to load aws config: " + err.Error())
+	}
+	eventBridge = eventbridge.NewFromConfig(cfg)
 	log, err = zap.NewProduction()
 	if err != nil {
 		panic("failed to create logger: " + err.Error())
@@ -40,7 +48,7 @@ func Start() {
 func HandleRequest(ctx context.Context, event events.DynamoDBEvent) error {
 	defer log.Sync()
 	log.Info("processing records", zap.Int("count", len(event.Records)))
-	var outboundEvents []*eventbridge.PutEventsRequestEntry
+	var outboundEvents []types.PutEventsRequestEntry
 	for i := 0; i < len(event.Records); i++ {
 		id, eventType, outboundEvent, err := createOutboundEvent(event.Records[i].Change.NewImage)
 		if err != nil {
@@ -49,32 +57,40 @@ func HandleRequest(ctx context.Context, event events.DynamoDBEvent) error {
 		if outboundEvent == nil {
 			continue
 		}
-		outboundEvents = append(outboundEvents, outboundEvent)
+		outboundEvents = append(outboundEvents, *outboundEvent)
 		log.Info("found outbound event", zap.String("id", id), zap.String("type", eventType))
 	}
 	batches := batch(outboundEvents, 10)
 	for i := 0; i < len(batches); i++ {
 		log.Info("sending batch", zap.Int("batch", i+1), zap.Int("n", len(batches)))
-		peo, err := eventBridge.PutEvents(&eventbridge.PutEventsInput{
+		peo, err := eventBridge.PutEvents(context.Background(), &eventbridge.PutEventsInput{
 			Entries: batches[i],
 		})
 		if err != nil {
 			return fmt.Errorf("failed to send events: %v", err)
 		}
-		if *peo.FailedEntryCount > 0 {
-			return fmt.Errorf("failed to send %d events", *peo.FailedEntryCount)
+		if peo.FailedEntryCount > 0 {
+			return fmt.Errorf("failed to send %d events", peo.FailedEntryCount)
 		}
 	}
 	log.Info("complete", zap.Int("sent", len(outboundEvents)))
 	return nil
 }
 
-func createOutboundEvent(r map[string]events.DynamoDBAttributeValue) (id, eventType string, e *eventbridge.PutEventsRequestEntry, err error) {
+func createOutboundEvent(r map[string]events.DynamoDBAttributeValue) (id, eventType string, e *types.PutEventsRequestEntry, err error) {
 	pkField, ok := r["_pk"]
 	if !ok {
 		return
 	}
 	id = pkField.String()
+	skField, ok := r["_sk"]
+	if !ok {
+		return
+	}
+	sk := skField.String()
+	if !strings.HasPrefix(sk, "OUTBOUND/") {
+		return
+	}
 	typ, ok := r["_typ"]
 	if !ok {
 		return
@@ -105,7 +121,7 @@ func createOutboundEvent(r map[string]events.DynamoDBAttributeValue) (id, eventT
 	}
 	detail := string(detailJSON)
 
-	e = &eventbridge.PutEventsRequestEntry{
+	e = &types.PutEventsRequestEntry{
 		DetailType:   &eventType,
 		EventBusName: &eventBusName,
 		Source:       &eventSourceName,
@@ -177,7 +193,7 @@ func getNumber(s string) (interface{}, error) {
 	return nil, fmt.Errorf("cannot parse %q as int64 or float64", s)
 }
 
-func batch(values []*eventbridge.PutEventsRequestEntry, n int) (pages [][]*eventbridge.PutEventsRequestEntry) {
+func batch(values []types.PutEventsRequestEntry, n int) (pages [][]types.PutEventsRequestEntry) {
 	for i := 0; i < len(values); i += n {
 		limit := i + n
 		if limit > len(values) {
