@@ -32,46 +32,58 @@ func init() {
 	client = dynamodb.NewFromConfig(cfg)
 }
 
+type StoreOption func(*StoreOptions) error
+
+type StoreOptions struct {
+	Region                string
+}
+
+func WithRegion(region string) StoreOption {
+	return func(o *StoreOptions) error {
+		o.Region = region
+		return nil
+	}
+}
+
 // NewStore creates a new store using default config.
-func NewStore(tableName, namespace string) (s *DynamoDBStore, err error) {
-	if initErr != nil {
-		err = initErr
+func NewStore(tableName, namespace string, opts ...StoreOption) (s *DynamoDBStore, err error) {
+	o := StoreOptions{}
+	for _, opt := range opts {
+		err = opt(&o)
+		if err != nil {
+			return
+		}
+	}
+	cfg, err = config.LoadDefaultConfig(context.Background(), config.WithRegion(o.Region))
+	if err != nil {
 		return
 	}
 	s = &DynamoDBStore{
-		Client:    client,
-		TableName: aws.String(tableName),
+		Client:        dynamodb.NewFromConfig(cfg),
+		TableName:     aws.String(tableName),
+		Namespace:     namespace,
 		Now: func() time.Time {
 			return time.Now().UTC()
 		},
-		Namespace: namespace,
 	}
 	return
 }
 
 // NewStoreWithConfig creates a new store with custom config.
-func NewStoreWithConfig(region, tableName, namespace string) (s *DynamoDBStore, err error) {
-	cfg, err := config.LoadDefaultConfig(context.Background(), config.WithRegion(region))
-	if err != nil {
-		return
-	}
-	s = &DynamoDBStore{
-		Client:    dynamodb.NewFromConfig(cfg),
-		TableName: aws.String(tableName),
-		Now: func() time.Time {
-			return time.Now().UTC()
-		},
-		Namespace: namespace,
-	}
-	return
+//
+// Deprecated: Use NewStore with the WithRegion option
+func NewStoreWithConfig(region, tableName, namespace string, opts ...StoreOption) (s *DynamoDBStore, err error) {
+	opts = append(opts, WithRegion(region))
+	return NewStore(tableName, namespace, opts...)
 }
 
 // DynamoDBStore is a DynamoDB implementation of the Store interface.
 type DynamoDBStore struct {
-	Client    *dynamodb.Client
-	TableName *string
-	Now       func() time.Time
-	Namespace string
+	Client        *dynamodb.Client
+	TableName     *string
+	Namespace     string
+	PersitHistory bool
+	Now           func() time.Time
 }
 
 // Get data using the id and populate the state variable.

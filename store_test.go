@@ -13,7 +13,7 @@ func TestGetStateNotFoundIntegration(t *testing.T) {
 	// Arrange.
 	name := createLocalTable(t)
 	defer deleteLocalTable(t, name)
-	s, err := NewStoreWithConfig(region, name, "Average")
+	s, err := NewStore(name, "Average", WithRegion(region))
 	s.Client = testClient
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
@@ -39,7 +39,7 @@ func TestPutStateIntegration(t *testing.T) {
 	// Arrange.
 	name := createLocalTable(t)
 	defer deleteLocalTable(t, name)
-	s, err := NewStoreWithConfig(region, name, "Average")
+	s, err := NewStore(name, "Average", WithRegion(region))
 	s.Client = testClient
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
@@ -62,7 +62,7 @@ func TestPutStateCannotOverwriteIntegration(t *testing.T) {
 	// Arrange.
 	name := createLocalTable(t)
 	defer deleteLocalTable(t, name)
-	s, err := NewStoreWithConfig(region, name, "Average")
+	s, err := NewStore(name, "Average", WithRegion(region))
 	s.Client = testClient
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
@@ -87,7 +87,7 @@ func TestGetStateIntegration(t *testing.T) {
 	// Arrange.
 	name := createLocalTable(t)
 	defer deleteLocalTable(t, name)
-	s, err := NewStoreWithConfig(region, name, "Average")
+	s, err := NewStore(name, "Average", WithRegion(region))
 	s.Client = testClient
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)

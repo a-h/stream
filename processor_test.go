@@ -154,7 +154,7 @@ func TestProcessorIntegration(t *testing.T) {
 	// Arrange.
 	name := createLocalTable(t)
 	defer deleteLocalTable(t, name)
-	s, err := NewStoreWithConfig(region, name, "Batch")
+	s, err := NewStore(name, "Batch", WithRegion(region))
 	s.Client = testClient
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
