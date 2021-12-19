@@ -26,6 +26,7 @@ type StoreOptions struct {
 	Region              string
 	Client              *dynamodb.Client
 	PersistStateHistory bool
+	CodecTag            string
 }
 
 func WithRegion(region string) StoreOption {
@@ -45,6 +46,13 @@ func WithPersistStateHistory(do bool) StoreOption {
 func WithClient(client *dynamodb.Client) StoreOption {
 	return func(o *StoreOptions) error {
 		o.Client = client
+		return nil
+	}
+}
+
+func WithCodecTag(tag string) StoreOption {
+	return func(o *StoreOptions) error {
+		o.CodecTag = tag
 		return nil
 	}
 }
@@ -71,6 +79,12 @@ func NewStore(tableName, namespace string, opts ...StoreOption) (s *DynamoDBStor
 		TableName:           aws.String(tableName),
 		Namespace:           namespace,
 		PersistStateHistory: o.PersistStateHistory,
+		Encoder: attributevalue.NewEncoder(func(opts *attributevalue.EncoderOptions) {
+			opts.TagKey = o.CodecTag
+		}),
+		Decoder: attributevalue.NewDecoder(func(opts *attributevalue.DecoderOptions) {
+			opts.TagKey = o.CodecTag
+		}),
 		Now: func() time.Time {
 			return time.Now().UTC()
 		},
@@ -92,6 +106,8 @@ type DynamoDBStore struct {
 	TableName           *string
 	Namespace           string
 	PersistStateHistory bool
+	Encoder             *attributevalue.Encoder
+	Decoder             *attributevalue.Decoder
 	Now                 func() time.Time
 }
 
@@ -116,7 +132,7 @@ func (ddb *DynamoDBStore) Get(id string, state State) (sequence int64, err error
 		err = ErrStateNotFound
 		return
 	}
-	err = attributevalue.UnmarshalMap(gio.Item, state)
+	err = ddb.unmarshalMap(gio.Item, state)
 	if err != nil {
 		return
 	}
@@ -273,7 +289,7 @@ func (ddb *DynamoDBStore) attributeValueInteger(i int64) types.AttributeValue {
 }
 
 func (ddb *DynamoDBStore) createRecord(id, sk string, sequence int64, item interface{}, recordName string) (record map[string]types.AttributeValue, err error) {
-	record, err = attributevalue.MarshalMap(item)
+	record, err = ddb.marshalMap(item)
 	if err != nil {
 		err = fmt.Errorf("error marshalling item to map: %w", err)
 		return
@@ -423,7 +439,7 @@ func (ddb *DynamoDBStore) QueryWithHistory(id string, state State, inboundEventR
 			case "STATE":
 				if suffix == "" {
 					found = true
-					pagerError = attributevalue.UnmarshalMap(r, state)
+					pagerError = ddb.unmarshalMap(r, state)
 					if pagerError != nil {
 						return false
 					}
@@ -505,3 +521,20 @@ func (ddb *DynamoDBStore) splitSortKey(item map[string]types.AttributeValue) (pr
 	}
 	return
 }
+
+
+func (ddb *DynamoDBStore) unmarshalMap(m map[string]types.AttributeValue, out interface{}) error {
+	return ddb.Decoder.Decode(&types.AttributeValueMemberM{Value: m}, out)
+}
+
+func (ddb *DynamoDBStore) marshalMap(in interface{}) (out map[string]types.AttributeValue, err error) {
+	av, err := ddb.Encoder.Encode(in)
+
+	asMap, ok := av.(*types.AttributeValueMemberM)
+	if err != nil || av == nil || !ok {
+		return
+	}
+	out = asMap.Value
+	return
+}
+

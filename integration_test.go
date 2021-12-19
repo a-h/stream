@@ -12,9 +12,9 @@ import (
 )
 
 type AverageState struct {
-	Sum   int
-	Count int
-	Value float64
+	Sum   int     `json:"sum"`
+	Count int     `json:"count"`
+	Value float64 `json:"value"`
 }
 
 func (s *AverageState) Process(event InboundEvent) (outbound []OutboundEvent, err error) {

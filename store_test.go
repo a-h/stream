@@ -1,8 +1,11 @@
 package stream
 
 import (
+	"context"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -102,6 +105,64 @@ func TestPutStateCannotOverwriteIntegration(t *testing.T) {
 	err = s.Put("id", 0, as, nil, nil)
 	if err != ErrOptimisticConcurrency {
 		t.Errorf("expected error overwriting an existing version number, but got: %v", err)
+	}
+}
+
+// AliasedAverageState is used to test the JSON encoding. We need to use a
+// different (or aliased) type to AverageState as attributevalue.Encoder.Encode
+// uses a cache internally when looking up the attribute name to use, in order
+// to prevent repeated calls the reflect.TypeOf. This has the unfortunate
+// side-effect of causing this test fail as the other tests run first and the
+// cache gets populated with the raw field names rather than the one specified
+// in the json struct tag. It has the other unfortunate side-effect of deleting
+// HOURS from life trying to understand why this test would fail with
+// AverageState but not another identical type!
+type AliasedAverageState struct {
+	AverageState
+}
+
+func (s *AliasedAverageState) Process(event InboundEvent) (outbound []OutboundEvent, err error) {
+	return s.AverageState.Process(event)
+}
+
+func TestJSONCodecIntegration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	// Arrange.
+	name := createLocalTable(t)
+	defer deleteLocalTable(t, name)
+	s, err := NewStore(name, "Average", WithRegion(region), WithClient(testClient), WithCodecTag("json"))
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+	as := AliasedAverageState{AverageState: AverageState{Sum: 1}}
+
+	if err != nil {
+		t.Errorf("failed to encode: %v", err)
+	}
+
+	// Act.
+	err = s.Put("id", 0, &as, nil, nil)
+
+	// Assert.
+	if err != nil {
+		t.Errorf("unexpected error writing initial state: %v", err)
+	}
+
+	// Ensure state was marshalled using JSON struct tags
+	out, err := s.Client.GetItem(context.Background(), &dynamodb.GetItemInput{
+		TableName: &name,
+		Key: map[string]types.AttributeValue{
+			"_pk": &types.AttributeValueMemberS{Value: "Average/id"},
+			"_sk": &types.AttributeValueMemberS{Value: "STATE"},
+		},
+	})
+	if err != nil {
+		t.Errorf("unexpected error getting item: %v", err)
+	}
+	if _, ok := out.Item["sum"]; !ok {
+		t.Errorf("unexpected attribute name %q, but it wasn't found: %v", "sum", out.Item)
 	}
 }
 
