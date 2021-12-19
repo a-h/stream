@@ -13,8 +13,7 @@ func TestGetStateNotFoundIntegration(t *testing.T) {
 	// Arrange.
 	name := createLocalTable(t)
 	defer deleteLocalTable(t, name)
-	s, err := NewStore(name, "Average", WithRegion(region))
-	s.Client = testClient
+	s, err := NewStore(name, "Average", WithRegion(region), WithClient(testClient))
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
 	}
@@ -39,8 +38,7 @@ func TestPutStateIntegration(t *testing.T) {
 	// Arrange.
 	name := createLocalTable(t)
 	defer deleteLocalTable(t, name)
-	s, err := NewStore(name, "Average", WithRegion(region))
-	s.Client = testClient
+	s, err := NewStore(name, "Average", WithRegion(region), WithClient(testClient))
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
 	}
@@ -55,6 +53,34 @@ func TestPutStateIntegration(t *testing.T) {
 	}
 }
 
+func TestPutStateWithHistoryIntegration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	// Arrange.
+	name := createLocalTable(t)
+	defer deleteLocalTable(t, name)
+	s, err := NewStore(name, "Average", WithRegion(region), WithClient(testClient), WithPersistStateHistory(true))
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+	as := &AverageState{}
+
+	// Act.
+	err = s.Put("id", 0, as, nil, nil)
+
+	if err != nil {
+		t.Errorf("unexpected error writing initial state: %v", err)
+	}
+
+	err = s.Put("id", 1, as, nil, nil)
+
+	if err != nil {
+		t.Errorf("unexpected error writing updated state: %v", err)
+	}
+
+}
+
 func TestPutStateCannotOverwriteIntegration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
@@ -62,8 +88,7 @@ func TestPutStateCannotOverwriteIntegration(t *testing.T) {
 	// Arrange.
 	name := createLocalTable(t)
 	defer deleteLocalTable(t, name)
-	s, err := NewStore(name, "Average", WithRegion(region))
-	s.Client = testClient
+	s, err := NewStore(name, "Average", WithRegion(region), WithClient(testClient))
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
 	}
@@ -87,8 +112,7 @@ func TestGetStateIntegration(t *testing.T) {
 	// Arrange.
 	name := createLocalTable(t)
 	defer deleteLocalTable(t, name)
-	s, err := NewStore(name, "Average", WithRegion(region))
-	s.Client = testClient
+	s, err := NewStore(name, "Average", WithRegion(region), WithClient(testClient))
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
 	}
