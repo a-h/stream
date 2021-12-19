@@ -20,18 +20,6 @@ import (
 var ErrStateNotFound = errors.New("state not found")
 var ErrOptimisticConcurrency = errors.New("state has been updated since it was read, try again")
 
-var cfg aws.Config
-var client *dynamodb.Client
-var initErr error
-
-func init() {
-	cfg, initErr = config.LoadDefaultConfig(context.Background())
-	if initErr != nil {
-		return
-	}
-	client = dynamodb.NewFromConfig(cfg)
-}
-
 type StoreOption func(*StoreOptions) error
 
 type StoreOptions struct {
@@ -71,6 +59,7 @@ func NewStore(tableName, namespace string, opts ...StoreOption) (s *DynamoDBStor
 		}
 	}
 	if o.Client == nil {
+		var cfg aws.Config
 		cfg, err = config.LoadDefaultConfig(context.Background(), config.WithRegion(o.Region))
 		if err != nil {
 			return
@@ -402,8 +391,8 @@ func (ddb *DynamoDBStore) queryPages(qi *dynamodb.QueryInput, pager func(*dynamo
 }
 
 func (ddb *DynamoDBStore) Query(id string, state State, inboundEventReader *InboundEventReader, outboundEventReader *OutboundEventReader) (sequence int64, inbound []InboundEvent, outbound []OutboundEvent, err error) {
-	noopStateTransitionReader := NewStateHistoryReader(func(item map[string]types.AttributeValue) (State, error) { return nil, nil })
-	sequence, inbound, outbound, _, err = ddb.QueryWithHistory(id, state, inboundEventReader, outboundEventReader, noopStateTransitionReader)
+	noopStateHistoryReader := NewStateHistoryReader(func(item map[string]types.AttributeValue) (State, error) { return nil, nil })
+	sequence, inbound, outbound, _, err = ddb.QueryWithHistory(id, state, inboundEventReader, outboundEventReader, noopStateHistoryReader)
 	return
 }
 
@@ -429,7 +418,7 @@ func (ddb *DynamoDBStore) QueryWithHistory(id string, state State, inboundEventR
 	pager := func(qo *dynamodb.QueryOutput, _ bool) (carryOn bool) {
 		for i := 0; i < len(qo.Items); i++ {
 			r := qo.Items[i]
-			prefix, suffix := ddb.getSortKeyPrefix(r)
+			prefix, suffix := ddb.splitSortKey(r)
 			switch prefix {
 			case "STATE":
 				if suffix == "" {
@@ -501,7 +490,7 @@ func (ddb *DynamoDBStore) QueryWithHistory(id string, state State, inboundEventR
 	return
 }
 
-func (ddb *DynamoDBStore) getSortKeyPrefix(item map[string]types.AttributeValue) (prefix string, suffix string) {
+func (ddb *DynamoDBStore) splitSortKey(item map[string]types.AttributeValue) (prefix string, suffix string) {
 	sk, ok := item["_sk"]
 	if !ok {
 		return

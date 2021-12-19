@@ -23,12 +23,10 @@ func (s *AverageState) Process(event InboundEvent) (outbound []OutboundEvent, er
 		s.Count++
 		s.Sum += e.Number
 		s.Value = float64(s.Sum) / float64(s.Count)
-		break
 	case Subtract:
 		s.Count++
 		s.Sum -= e.Number
 		s.Value = float64(s.Sum) / float64(s.Count)
-		break
 	}
 	outbound = append(outbound, Average{s.Value}, Count{s.Count})
 	return
@@ -215,9 +213,7 @@ func TestIntegration(t *testing.T) {
 		if err != nil {
 			panic(err)
 		}
-		for _, item := range page.Items {
-			items = append(items, item)
-		}
+		items = append(items, page.Items...)
 	}
 	if diff := cmp.Diff(expectedItems, items, cmp.AllowUnexported(types.AttributeValueMemberS{}, types.AttributeValueMemberN{})); diff != "" {
 		t.Error("unexpected database state")

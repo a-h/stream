@@ -1,8 +1,6 @@
 package stream
 
 import (
-	"encoding/json"
-	"os"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
@@ -32,7 +30,6 @@ func (s *BatchState) Process(event InboundEvent) (outbound []OutboundEvent, err 
 			s.BatchesEmitted++
 			s.Values = nil
 		}
-		break
 	}
 	return
 }
@@ -260,8 +257,6 @@ func TestProcessorIntegration(t *testing.T) {
 			func(item map[string]types.AttributeValue) (State, error) {
 				state := &BatchState{}
 				err := attributevalue.UnmarshalMap(item, state)
-				_ = json.NewEncoder(os.Stdout).Encode(item)
-				_ = json.NewEncoder(os.Stdout).Encode(state)
 				return state, err
 			})
 		var stateHistory []State
