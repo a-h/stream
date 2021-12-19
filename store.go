@@ -104,6 +104,7 @@ func (ddb *DynamoDBStore) Get(id string, state State) (sequence int64, err error
 
 // Put the updated state in the database.
 func (ddb *DynamoDBStore) Put(id string, atSequence int64, state State, inbound []InboundEvent, outbound []OutboundEvent) error {
+	atSequence++
 	stwi, err := ddb.createStateTransactWriteItem(id, atSequence, state)
 	if err != nil {
 		return err
@@ -141,8 +142,8 @@ func (ddb *DynamoDBStore) createInboundTransactWriteItems(id string, atSequence 
 	for i := 0; i < len(inbound); i++ {
 		var item map[string]types.AttributeValue
 		item, err = ddb.createRecord(id,
-			ddb.createInboundRecordSortKey(inbound[i].EventName(), atSequence+int64(i+1)),
-			atSequence+int64(i+1),
+			ddb.createInboundRecordSortKey(inbound[i].EventName(), atSequence, i),
+			atSequence,
 			inbound[i],
 			inbound[i].EventName())
 		if err != nil {
@@ -158,8 +159,8 @@ func (ddb *DynamoDBStore) createOutboundTransactWriteItems(id string, atSequence
 	for i := 0; i < len(outbound); i++ {
 		var item map[string]types.AttributeValue
 		item, err = ddb.createRecord(id,
-			ddb.createOutboundRecordSortKey(outbound[i].EventName(), atSequence+1, i),
-			atSequence+int64(i+1),
+			ddb.createOutboundRecordSortKey(outbound[i].EventName(), atSequence, i),
+			atSequence,
 			outbound[i],
 			outbound[i].EventName())
 		if err != nil {
@@ -184,7 +185,7 @@ func (ddb *DynamoDBStore) createPut(item map[string]types.AttributeValue) types.
 }
 
 func (ddb *DynamoDBStore) createStateTransactWriteItem(id string, atSequence int64, state State) (twi types.TransactWriteItem, err error) {
-	item, err := ddb.createRecord(id, ddb.createStateRecordSortKey(), atSequence+1, state, ddb.Namespace)
+	item, err := ddb.createRecord(id, ddb.createStateRecordSortKey(), atSequence, state, ddb.Namespace)
 	if err != nil {
 		return
 	}
@@ -198,7 +199,7 @@ func (ddb *DynamoDBStore) createStateTransactWriteItem(id string, atSequence int
 				"#_seq": "_seq",
 			},
 			ExpressionAttributeValues: map[string]types.AttributeValue{
-				":_seq": ddb.attributeValueInteger(int64(atSequence)),
+				":_seq": ddb.attributeValueInteger(int64(atSequence - 1)),
 			},
 		},
 	}
@@ -213,12 +214,12 @@ func (ddb *DynamoDBStore) createStateRecordSortKey() string {
 	return "STATE"
 }
 
-func (ddb *DynamoDBStore) createInboundRecordSortKey(typeName string, sequence int64) string {
-	return fmt.Sprintf(`INBOUND/%s/%d`, typeName, sequence)
+func (ddb *DynamoDBStore) createInboundRecordSortKey(typeName string, sequence int64, index int) string {
+	return fmt.Sprintf(`INBOUND/%d/%d/%s`, sequence, index, typeName)
 }
 
 func (ddb *DynamoDBStore) createOutboundRecordSortKey(typeName string, sequence int64, index int) string {
-	return fmt.Sprintf(`OUTBOUND/%s/%d/%d`, typeName, sequence, index)
+	return fmt.Sprintf(`OUTBOUND/%d/%d/%s`, sequence, index, typeName)
 }
 
 func (ddb *DynamoDBStore) attributeValueString(v string) types.AttributeValue {

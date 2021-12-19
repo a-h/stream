@@ -6,30 +6,6 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-type AverageState struct {
-	Sum   int
-	Count int
-	Value float64
-}
-
-func (s *AverageState) Process(event InboundEvent) (outbound []OutboundEvent, err error) {
-	switch e := event.(type) {
-	case AverageInput:
-		s.Count++
-		s.Sum += e.Number
-		s.Value = float64(s.Sum) / float64(s.Count)
-		break
-	}
-	return
-}
-
-type AverageInput struct {
-	Number int
-}
-
-func (ai AverageInput) EventName() string { return "AverageInput" }
-func (ai AverageInput) IsInbound()        {}
-
 func TestGetStateNotFoundIntegration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
