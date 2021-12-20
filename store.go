@@ -20,58 +20,95 @@ import (
 var ErrStateNotFound = errors.New("state not found")
 var ErrOptimisticConcurrency = errors.New("state has been updated since it was read, try again")
 
-var cfg aws.Config
-var client *dynamodb.Client
-var initErr error
+type StoreOption func(*StoreOptions) error
 
-func init() {
-	cfg, initErr = config.LoadDefaultConfig(context.Background())
-	if initErr != nil {
-		return
+type StoreOptions struct {
+	Region              string
+	Client              *dynamodb.Client
+	PersistStateHistory bool
+	CodecTag            string
+}
+
+func WithRegion(region string) StoreOption {
+	return func(o *StoreOptions) error {
+		o.Region = region
+		return nil
 	}
-	client = dynamodb.NewFromConfig(cfg)
+}
+
+func WithPersistStateHistory(do bool) StoreOption {
+	return func(o *StoreOptions) error {
+		o.PersistStateHistory = do
+		return nil
+	}
+}
+
+func WithClient(client *dynamodb.Client) StoreOption {
+	return func(o *StoreOptions) error {
+		o.Client = client
+		return nil
+	}
+}
+
+func WithCodecTag(tag string) StoreOption {
+	return func(o *StoreOptions) error {
+		o.CodecTag = tag
+		return nil
+	}
 }
 
 // NewStore creates a new store using default config.
-func NewStore(tableName, namespace string) (s *DynamoDBStore, err error) {
-	if initErr != nil {
-		err = initErr
-		return
+func NewStore(tableName, namespace string, opts ...StoreOption) (s *DynamoDBStore, err error) {
+	o := StoreOptions{}
+	for _, opt := range opts {
+		err = opt(&o)
+		if err != nil {
+			return
+		}
+	}
+	if o.Client == nil {
+		var cfg aws.Config
+		cfg, err = config.LoadDefaultConfig(context.Background(), config.WithRegion(o.Region))
+		if err != nil {
+			return
+		}
+		o.Client = dynamodb.NewFromConfig(cfg)
 	}
 	s = &DynamoDBStore{
-		Client:    client,
-		TableName: aws.String(tableName),
+		Client:              o.Client,
+		TableName:           aws.String(tableName),
+		Namespace:           namespace,
+		PersistStateHistory: o.PersistStateHistory,
+		Encoder: attributevalue.NewEncoder(func(opts *attributevalue.EncoderOptions) {
+			opts.TagKey = o.CodecTag
+		}),
+		Decoder: attributevalue.NewDecoder(func(opts *attributevalue.DecoderOptions) {
+			opts.TagKey = o.CodecTag
+		}),
 		Now: func() time.Time {
 			return time.Now().UTC()
 		},
-		Namespace: namespace,
 	}
 	return
 }
 
 // NewStoreWithConfig creates a new store with custom config.
-func NewStoreWithConfig(region, tableName, namespace string) (s *DynamoDBStore, err error) {
-	cfg, err := config.LoadDefaultConfig(context.Background(), config.WithRegion(region))
-	if err != nil {
-		return
-	}
-	s = &DynamoDBStore{
-		Client:    dynamodb.NewFromConfig(cfg),
-		TableName: aws.String(tableName),
-		Now: func() time.Time {
-			return time.Now().UTC()
-		},
-		Namespace: namespace,
-	}
-	return
+//
+// Deprecated: Use NewStore with the WithRegion option
+func NewStoreWithConfig(region, tableName, namespace string, opts ...StoreOption) (s *DynamoDBStore, err error) {
+	opts = append(opts, WithRegion(region))
+	return NewStore(tableName, namespace, opts...)
 }
 
 // DynamoDBStore is a DynamoDB implementation of the Store interface.
 type DynamoDBStore struct {
-	Client    *dynamodb.Client
-	TableName *string
-	Now       func() time.Time
-	Namespace string
+	Client              *dynamodb.Client
+	TableName           *string
+	Namespace           string
+	PersistStateHistory bool
+	Encoder             *attributevalue.Encoder
+	Decoder             *attributevalue.Decoder
+	Now                 func() time.Time
 }
 
 // Get data using the id and populate the state variable.
@@ -95,7 +132,7 @@ func (ddb *DynamoDBStore) Get(id string, state State) (sequence int64, err error
 		err = ErrStateNotFound
 		return
 	}
-	err = attributevalue.UnmarshalMap(gio.Item, state)
+	err = ddb.unmarshalMap(gio.Item, state)
 	if err != nil {
 		return
 	}
@@ -105,7 +142,7 @@ func (ddb *DynamoDBStore) Get(id string, state State) (sequence int64, err error
 // Put the updated state in the database.
 func (ddb *DynamoDBStore) Put(id string, atSequence int64, state State, inbound []InboundEvent, outbound []OutboundEvent) error {
 	atSequence++
-	stwi, err := ddb.createStateTransactWriteItem(id, atSequence, state)
+	stwi, err := ddb.createStateTransactWriteItems(id, atSequence, state)
 	if err != nil {
 		return err
 	}
@@ -118,7 +155,7 @@ func (ddb *DynamoDBStore) Put(id string, atSequence int64, state State, inbound 
 		return err
 	}
 	var items []types.TransactWriteItem
-	items = append(items, stwi)
+	items = append(items, stwi...)
 	items = append(items, itwi...)
 	items = append(items, otwi...)
 	_, err = ddb.Client.TransactWriteItems(context.Background(), &dynamodb.TransactWriteItemsInput{
@@ -184,8 +221,8 @@ func (ddb *DynamoDBStore) createPut(item map[string]types.AttributeValue) types.
 	}
 }
 
-func (ddb *DynamoDBStore) createStateTransactWriteItem(id string, atSequence int64, state State) (twi types.TransactWriteItem, err error) {
-	item, err := ddb.createRecord(id, ddb.createStateRecordSortKey(), atSequence, state, ddb.Namespace)
+func (ddb *DynamoDBStore) createStateTransactWriteItem(id string, atSequence int64, state State, key string) (twi types.TransactWriteItem, err error) {
+	item, err := ddb.createRecord(id, key, atSequence, state, ddb.Namespace)
 	if err != nil {
 		return
 	}
@@ -206,12 +243,32 @@ func (ddb *DynamoDBStore) createStateTransactWriteItem(id string, atSequence int
 	return
 }
 
+func (ddb *DynamoDBStore) createStateTransactWriteItems(id string, atSequence int64, state State) (twis []types.TransactWriteItem, err error) {
+	twi, err := ddb.createStateTransactWriteItem(id, atSequence, state, ddb.createStateRecordSortKey())
+	if err != nil {
+		return
+	}
+	twis = append(twis, twi)
+	if ddb.PersistStateHistory {
+		twi, err = ddb.createStateTransactWriteItem(id, atSequence, state, ddb.createVersionedRecordSortKey(atSequence))
+		if err != nil {
+			return
+		}
+		twis = append(twis, twi)
+	}
+	return
+}
+
 func (ddb *DynamoDBStore) createPartitionKey(id string) string {
 	return fmt.Sprintf(`%s/%s`, ddb.Namespace, id)
 }
 
 func (ddb *DynamoDBStore) createStateRecordSortKey() string {
 	return "STATE"
+}
+
+func (ddb *DynamoDBStore) createVersionedRecordSortKey(atSequence int64) string {
+	return fmt.Sprintf("STATE/%d", atSequence)
 }
 
 func (ddb *DynamoDBStore) createInboundRecordSortKey(typeName string, sequence int64, index int) string {
@@ -232,7 +289,7 @@ func (ddb *DynamoDBStore) attributeValueInteger(i int64) types.AttributeValue {
 }
 
 func (ddb *DynamoDBStore) createRecord(id, sk string, sequence int64, item interface{}, recordName string) (record map[string]types.AttributeValue, err error) {
-	record, err = attributevalue.MarshalMap(item)
+	record, err = ddb.marshalMap(item)
 	if err != nil {
 		err = fmt.Errorf("error marshalling item to map: %w", err)
 		return
@@ -285,8 +342,9 @@ type InboundEventReader struct {
 	readers map[string]func(item map[string]types.AttributeValue) (InboundEvent, error)
 }
 
-func (r *InboundEventReader) Add(eventName string, f func(item map[string]types.AttributeValue) (InboundEvent, error)) {
+func (r *InboundEventReader) Add(eventName string, f func(item map[string]types.AttributeValue) (InboundEvent, error)) *InboundEventReader {
 	r.readers[eventName] = f
+	return r
 }
 
 func (r *InboundEventReader) Read(eventName string, item map[string]types.AttributeValue) (e InboundEvent, ok bool, err error) {
@@ -308,8 +366,9 @@ type OutboundEventReader struct {
 	readers map[string]func(item map[string]types.AttributeValue) (OutboundEvent, error)
 }
 
-func (r *OutboundEventReader) Add(eventName string, f func(item map[string]types.AttributeValue) (OutboundEvent, error)) {
+func (r *OutboundEventReader) Add(eventName string, f func(item map[string]types.AttributeValue) (OutboundEvent, error)) *OutboundEventReader {
 	r.readers[eventName] = f
+	return r
 }
 
 func (r *OutboundEventReader) Read(eventName string, item map[string]types.AttributeValue) (e OutboundEvent, ok bool, err error) {
@@ -321,9 +380,22 @@ func (r *OutboundEventReader) Read(eventName string, item map[string]types.Attri
 	return
 }
 
+func NewStateHistoryReader(f func(item map[string]types.AttributeValue) (State, error)) *StateHistoryReader {
+	return &StateHistoryReader{reader: f}
+}
+
+type StateHistoryReader struct {
+	reader func(item map[string]types.AttributeValue) (State, error)
+}
+
+func (r *StateHistoryReader) Read(item map[string]types.AttributeValue) (e State, err error) {
+	e, err = r.reader(item)
+	return
+}
+
 func (ddb *DynamoDBStore) queryPages(qi *dynamodb.QueryInput, pager func(*dynamodb.QueryOutput, bool) bool) (err error) {
 	pages := dynamodb.NewQueryPaginator(ddb.Client, qi)
-	for carryOn := pages.HasMorePages(); carryOn; {
+	for carryOn := pages.HasMorePages(); carryOn && pages.HasMorePages(); {
 		var page *dynamodb.QueryOutput
 		page, err = pages.NextPage(context.Background())
 		if err != nil {
@@ -334,8 +406,14 @@ func (ddb *DynamoDBStore) queryPages(qi *dynamodb.QueryInput, pager func(*dynamo
 	return
 }
 
-// Query data for the id.
 func (ddb *DynamoDBStore) Query(id string, state State, inboundEventReader *InboundEventReader, outboundEventReader *OutboundEventReader) (sequence int64, inbound []InboundEvent, outbound []OutboundEvent, err error) {
+	noopStateHistoryReader := NewStateHistoryReader(func(item map[string]types.AttributeValue) (State, error) { return nil, nil })
+	sequence, inbound, outbound, _, err = ddb.QueryWithHistory(id, state, inboundEventReader, outboundEventReader, noopStateHistoryReader)
+	return
+}
+
+// Query data for the id.
+func (ddb *DynamoDBStore) QueryWithHistory(id string, state State, inboundEventReader *InboundEventReader, outboundEventReader *OutboundEventReader, stateHistoryReader *StateHistoryReader) (sequence int64, inbound []InboundEvent, outbound []OutboundEvent, stateHistory []State, err error) {
 	if reflect.ValueOf(state).Kind() != reflect.Ptr {
 		err = errors.New("the state parameter must be a pointer")
 		return
@@ -356,16 +434,26 @@ func (ddb *DynamoDBStore) Query(id string, state State, inboundEventReader *Inbo
 	pager := func(qo *dynamodb.QueryOutput, _ bool) (carryOn bool) {
 		for i := 0; i < len(qo.Items); i++ {
 			r := qo.Items[i]
-			switch ddb.getSortKeyPrefix(r) {
+			prefix, suffix := ddb.splitSortKey(r)
+			switch prefix {
 			case "STATE":
-				found = true
-				pagerError = attributevalue.UnmarshalMap(r, state)
-				if pagerError != nil {
-					return false
-				}
-				sequence, pagerError = ddb.getRecordSequenceNumber(r)
-				if pagerError != nil {
-					return false
+				if suffix == "" {
+					found = true
+					pagerError = ddb.unmarshalMap(r, state)
+					if pagerError != nil {
+						return false
+					}
+					sequence, pagerError = ddb.getRecordSequenceNumber(r)
+					if pagerError != nil {
+						return false
+					}
+				} else {
+					transition, err := stateHistoryReader.Read(r)
+					if err != nil {
+						pagerError = err
+						return false
+					}
+					stateHistory = append(stateHistory, transition)
 				}
 			case "INBOUND":
 				var typ string
@@ -418,14 +506,35 @@ func (ddb *DynamoDBStore) Query(id string, state State, inboundEventReader *Inbo
 	return
 }
 
-func (ddb *DynamoDBStore) getSortKeyPrefix(item map[string]types.AttributeValue) (prefix string) {
+func (ddb *DynamoDBStore) splitSortKey(item map[string]types.AttributeValue) (prefix string, suffix string) {
 	sk, ok := item["_sk"]
 	if !ok {
 		return
 	}
 	v, ok := sk.(*types.AttributeValueMemberS)
 	if ok {
-		return strings.SplitN(v.Value, "/", 2)[0]
+		split := strings.SplitN(v.Value, "/", 2)
+		prefix = split[0]
+		if len(split) == 2 {
+			suffix = split[1]
+		}
 	}
-	return ""
+	return
 }
+
+
+func (ddb *DynamoDBStore) unmarshalMap(m map[string]types.AttributeValue, out interface{}) error {
+	return ddb.Decoder.Decode(&types.AttributeValueMemberM{Value: m}, out)
+}
+
+func (ddb *DynamoDBStore) marshalMap(in interface{}) (out map[string]types.AttributeValue, err error) {
+	av, err := ddb.Encoder.Encode(in)
+
+	asMap, ok := av.(*types.AttributeValueMemberM)
+	if err != nil || av == nil || !ok {
+		return
+	}
+	out = asMap.Value
+	return
+}
+

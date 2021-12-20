@@ -30,7 +30,6 @@ func (s *BatchState) Process(event InboundEvent) (outbound []OutboundEvent, err 
 			s.BatchesEmitted++
 			s.Values = nil
 		}
-		break
 	}
 	return
 }
@@ -154,7 +153,7 @@ func TestProcessorIntegration(t *testing.T) {
 	// Arrange.
 	name := createLocalTable(t)
 	defer deleteLocalTable(t, name)
-	s, err := NewStoreWithConfig(region, name, "Batch")
+	s, err := NewStore(name, "Batch", WithRegion(region), WithPersistStateHistory(true))
 	s.Client = testClient
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
@@ -237,6 +236,56 @@ func TestProcessorIntegration(t *testing.T) {
 		}
 		if diff := cmp.Diff(expected, queriedState); diff != "" {
 			t.Error("unexpected state after query")
+			t.Error(diff)
+		}
+	})
+
+	t.Run("it is possible to query the state, inbound and outbound events, and state history", func(t *testing.T) {
+		inboundEventReader := NewInboundEventReader()
+		inboundEventReader.Add(BatchInput{}.EventName(), func(item map[string]types.AttributeValue) (InboundEvent, error) {
+			var event BatchInput
+			err := attributevalue.UnmarshalMap(item, &event)
+			return event, err
+		})
+		outboundEventReader := NewOutboundEventReader()
+		outboundEventReader.Add(BatchOutput{}.EventName(), func(item map[string]types.AttributeValue) (OutboundEvent, error) {
+			var event BatchOutput
+			err := attributevalue.UnmarshalMap(item, &event)
+			return event, err
+		})
+		stateHistoryReader := NewStateHistoryReader(
+			func(item map[string]types.AttributeValue) (State, error) {
+				state := &BatchState{}
+				err := attributevalue.UnmarshalMap(item, state)
+				return state, err
+			})
+		var stateHistory []State
+		queriedSequence, queriedInbound, queriedOutbound, stateHistory, err = s.QueryWithHistory("id", queriedState, inboundEventReader, outboundEventReader, stateHistoryReader)
+		if err != nil {
+			t.Errorf("got unexpected error from QueryWithHistory: %v", err)
+		}
+		if queriedSequence != 1 {
+			t.Errorf("query expected sequence of 1, got %d", queriedSequence)
+		}
+		if len(queriedInbound) != 4 {
+			t.Errorf("query expected 4 inbound records to be stored, got %d", len(queriedInbound))
+		}
+		if len(queriedOutbound) != 2 {
+			t.Errorf("query expected 2 outbound records to be stored, got %d", len(queriedOutbound))
+		}
+		expected := &BatchState{
+			BatchSize:      2,
+			BatchesEmitted: 2,
+		}
+		if diff := cmp.Diff(expected, queriedState); diff != "" {
+			t.Error("unexpected state after query")
+			t.Error(diff)
+		}
+		if len(stateHistory) != 1 {
+			t.Fatalf("query expected 1 state history record, got %d", stateHistory)
+		}
+		if diff := cmp.Diff(expected, stateHistory[0]); diff != "" {
+			t.Error("unexpected state history after query")
 			t.Error(diff)
 		}
 	})
