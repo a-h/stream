@@ -3,6 +3,8 @@ package stream
 import (
 	"errors"
 	"reflect"
+
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
 // State of the entity.
@@ -25,7 +27,9 @@ type OutboundEvent interface {
 // Store is the interface that describes database operations.
 type Store interface {
 	Get(id string, state State) (sequence int64, err error)
-	Put(id string, atSequence int64, state State, inbound []InboundEvent, output []OutboundEvent) error
+	Put(id string, atSequence int64, state State, inbound []InboundEvent, outbound []OutboundEvent) error
+	Prepare(id string, atSequence int64, state State, inbound []InboundEvent, outbound []OutboundEvent) (items []types.TransactWriteItem, err error)
+	Execute(items []types.TransactWriteItem) error
 }
 
 // Processor of events.
@@ -72,15 +76,33 @@ func Load(store Store, id string, state State) (p *Processor, err error) {
 
 // Process inbound events, then store the updated state and outbound events.
 func (p *Processor) Process(events ...InboundEvent) error {
+	items, err := p.Prepare(events...)
+	if err != nil {
+		return err
+	}
+	return p.Execute(items)
+}
+
+// Prepare the transaction. Usually, you'd want to use the Process method, this method
+// is for if you want to customise the underlying database transaction, e.g. by adding
+// additional records.
+func (p *Processor) Prepare(events ...InboundEvent) (items []types.TransactWriteItem, err error) {
 	var inbound []InboundEvent
 	var outbound []OutboundEvent
 	for i := 0; i < len(events); i++ {
 		inbound = append(inbound, events[i])
-		outboundEvents, err := p.state.Process(events[i])
+		var outboundEvents []OutboundEvent
+		outboundEvents, err = p.state.Process(events[i])
 		if err != nil {
-			return err
+			return
 		}
 		outbound = append(outbound, outboundEvents...)
 	}
-	return p.store.Put(p.id, p.sequence, p.state, inbound, outbound)
+	return p.store.Prepare(p.id, p.sequence, p.state, inbound, outbound)
+}
+
+// Execute the database transaction. Usually, you'd want to use the Process method,
+// this method is used if you need to customise the database transaction.
+func (p *Processor) Execute(items []types.TransactWriteItem) error {
+	return p.store.Execute(items)
 }

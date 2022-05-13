@@ -141,24 +141,16 @@ func (ddb *DynamoDBStore) Get(id string, state State) (sequence int64, err error
 
 // Put the updated state in the database.
 func (ddb *DynamoDBStore) Put(id string, atSequence int64, state State, inbound []InboundEvent, outbound []OutboundEvent) error {
-	atSequence++
-	stwi, err := ddb.createStateTransactWriteItems(id, atSequence, state)
+	items, err := ddb.Prepare(id, atSequence, state, inbound, outbound)
 	if err != nil {
 		return err
 	}
-	itwi, err := ddb.createInboundTransactWriteItems(id, atSequence, inbound)
-	if err != nil {
-		return err
-	}
-	otwi, err := ddb.createOutboundTransactWriteItems(id, atSequence, outbound)
-	if err != nil {
-		return err
-	}
-	var items []types.TransactWriteItem
-	items = append(items, stwi...)
-	items = append(items, itwi...)
-	items = append(items, otwi...)
-	_, err = ddb.Client.TransactWriteItems(context.Background(), &dynamodb.TransactWriteItemsInput{
+	return ddb.Execute(items)
+}
+
+// Execute a prepared transaction.
+func (ddb *DynamoDBStore) Execute(items []types.TransactWriteItem) error {
+	_, err := ddb.Client.TransactWriteItems(context.Background(), &dynamodb.TransactWriteItemsInput{
 		TransactItems: items,
 	})
 	if err != nil {
@@ -172,6 +164,27 @@ func (ddb *DynamoDBStore) Put(id string, atSequence int64, state State, inbound 
 		}
 	}
 	return err
+}
+
+// Prepare the transaction.
+func (ddb *DynamoDBStore) Prepare(id string, atSequence int64, state State, inbound []InboundEvent, outbound []OutboundEvent) (items []types.TransactWriteItem, err error) {
+	atSequence++
+	stwi, err := ddb.createStateTransactWriteItems(id, atSequence, state)
+	if err != nil {
+		return
+	}
+	itwi, err := ddb.createInboundTransactWriteItems(id, atSequence, inbound)
+	if err != nil {
+		return
+	}
+	otwi, err := ddb.createOutboundTransactWriteItems(id, atSequence, outbound)
+	if err != nil {
+		return
+	}
+	items = append(items, stwi...)
+	items = append(items, itwi...)
+	items = append(items, otwi...)
+	return
 }
 
 func (ddb *DynamoDBStore) createInboundTransactWriteItems(id string, atSequence int64, inbound []InboundEvent) (puts []types.TransactWriteItem, err error) {
@@ -522,7 +535,6 @@ func (ddb *DynamoDBStore) splitSortKey(item map[string]types.AttributeValue) (pr
 	return
 }
 
-
 func (ddb *DynamoDBStore) unmarshalMap(m map[string]types.AttributeValue, out interface{}) error {
 	return ddb.Decoder.Decode(&types.AttributeValueMemberM{Value: m}, out)
 }
@@ -537,4 +549,3 @@ func (ddb *DynamoDBStore) marshalMap(in interface{}) (out map[string]types.Attri
 	out = asMap.Value
 	return
 }
-
