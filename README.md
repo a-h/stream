@@ -55,6 +55,8 @@ func (bo BatchOutput) EventName() string { return "BatchOutput" }
 func (bo BatchOutput) IsOutbound()       {}
 ```
 
+Wire up the `./main/handler` to DynamoDB streams to send outbound events to EventBridge.
+
 ## Examples
 
 See the `./example` directory for a complete example.
