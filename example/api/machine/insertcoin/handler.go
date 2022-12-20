@@ -49,6 +49,7 @@ func (h Handler) Post(w http.ResponseWriter, r *http.Request) {
 	machine := models.NewSlotMachine(id)
 	p, err := stream.Load(h.Store, id, machine)
 	if err != nil {
+		h.Log.Error("failed to load machine", zap.Error(err))
 		http.Error(w, "failed to load machine", http.StatusInternalServerError)
 		return
 	}
@@ -68,6 +69,7 @@ func (h Handler) Post(w http.ResponseWriter, r *http.Request) {
 	enc := json.NewEncoder(w)
 	err = enc.Encode(machine)
 	if err != nil {
+		h.Log.Error("failed to encode machine", zap.Error(err))
 		http.Error(w, "failed to encode machine", http.StatusInternalServerError)
 		return
 	}

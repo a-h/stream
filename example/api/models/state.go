@@ -13,9 +13,10 @@ func NewSlotMachine(id string) *SlotMachine {
 		Balance:   0,
 		Payout:    4,
 		WinChance: 0.18,
-		Win:       func(chance float64) bool { return rand.Float64() <= chance },
 	}
 }
+
+func Win(chance float64) bool { return rand.Float64() <= chance }
 
 var ErrCannotInsertCoin = errors.New("cannot insert coin")
 var ErrCannotPullHandle = errors.New("cannot pull handle")
@@ -31,7 +32,6 @@ type SlotMachine struct {
 	Wins         int     `json:"wins"`
 	Losses       int     `json:"losses"`
 	IsCoinInSlot bool    `json:"isCoinInSlot"`
-	Win          func(chance float64) bool
 }
 
 func (s *SlotMachine) Process(event stream.InboundEvent) (outbound []stream.OutboundEvent, err error) {
@@ -71,7 +71,7 @@ func (s *SlotMachine) InsertCoin() (ok bool) {
 	return true
 }
 
-func (s *SlotMachine) PullHandle() (win bool, ok bool) {
+func (s *SlotMachine) PullHandle() (won bool, ok bool) {
 	// Complain if we can't take the coin.
 	ok = s.IsCoinInSlot
 	if !ok {
@@ -80,11 +80,11 @@ func (s *SlotMachine) PullHandle() (win bool, ok bool) {
 	s.IsCoinInSlot = false
 
 	// See if we win.
-	win = s.Win(s.WinChance)
+	won = Win(s.WinChance)
 
 	// Update the stats.
 	s.Games++
-	if win {
+	if won {
 		s.Wins++
 		s.Balance -= (s.Payout - 1)
 	} else {

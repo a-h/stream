@@ -66,6 +66,7 @@ func (h Handler) Post(w http.ResponseWriter, r *http.Request) {
 	enc := json.NewEncoder(w)
 	err = enc.Encode(machine)
 	if err != nil {
+		h.Log.Error("failed to encode machine", zap.String("id", id), zap.Error(err))
 		http.Error(w, "failed to encode machine", http.StatusInternalServerError)
 		return
 	}

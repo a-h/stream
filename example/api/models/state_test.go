@@ -5,7 +5,6 @@ import (
 
 	"github.com/a-h/stream"
 	"github.com/google/go-cmp/cmp"
-	"github.com/google/go-cmp/cmp/cmpopts"
 )
 
 func TestState(t *testing.T) {
@@ -53,7 +52,7 @@ func TestState(t *testing.T) {
 			name: "if a coin has been inserted, it's possible to play the game and win",
 			start: func() *SlotMachine {
 				m := NewSlotMachine(id)
-				m.Win = func(chance float64) bool { return true }
+				m.WinChance = 1.0
 				return m
 			}(),
 			previous: []stream.InboundEvent{
@@ -62,6 +61,7 @@ func TestState(t *testing.T) {
 			current: PullHandle{},
 			expected: func() *SlotMachine {
 				m := NewSlotMachine(id)
+				m.WinChance = 1.0
 				m.Balance = -3
 				m.Games = 1
 				m.Wins = 1
@@ -75,7 +75,6 @@ func TestState(t *testing.T) {
 	}
 	for _, tt := range tests {
 		tt := tt
-
 		actual := tt.start
 		if actual == nil {
 			actual = NewSlotMachine(id)
@@ -90,7 +89,7 @@ func TestState(t *testing.T) {
 		if tt.expectedErr != err {
 			t.Errorf("expected error '%v', got '%v'", tt.expectedErr, err)
 		}
-		if diff := cmp.Diff(tt.expected, actual, cmpopts.IgnoreFields(*tt.expected, "Win")); diff != "" {
+		if diff := cmp.Diff(tt.expected, actual); diff != "" {
 			t.Errorf("unexpected state:\n%v", diff)
 		}
 		if diff := cmp.Diff(tt.expectedEvents, actualEvents); diff != "" {
