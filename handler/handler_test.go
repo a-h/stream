@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -155,5 +156,116 @@ func TestOnlyOutboundTypeEventsAreEmitted(t *testing.T) {
 	}
 	if diff := cmp.Diff(expected, input.Entries[0], cmp.AllowUnexported(types.PutEventsRequestEntry{})); diff != "" {
 		t.Fatalf("unexpected event emitted: " + diff)
+	}
+}
+
+func TestBatch(t *testing.T) {
+	tests := []struct {
+		name               string
+		entries            []types.PutEventsRequestEntry
+		expectedBatchSizes []int
+	}{
+		{
+			name: "small messages are grouped to the maximum batch size of 10",
+			entries: []types.PutEventsRequestEntry{
+				createTestEvent(1 * 1024),
+				createTestEvent(1 * 1024),
+				createTestEvent(1 * 1024),
+				createTestEvent(1 * 1024),
+				createTestEvent(1 * 1024),
+				createTestEvent(1 * 1024),
+				createTestEvent(1 * 1024),
+				createTestEvent(1 * 1024),
+				createTestEvent(1 * 1024),
+				createTestEvent(1 * 1024),
+				createTestEvent(1 * 1024),
+			},
+			expectedBatchSizes: []int{10, 1},
+		},
+		{
+			name: "big messages are separated into their own batches",
+			entries: []types.PutEventsRequestEntry{
+				createTestEvent(256 * 1024),
+				createTestEvent(1 * 1024),
+			},
+			expectedBatchSizes: []int{1, 1},
+		},
+		{
+			name: "medium messages can be grouped separated into their own batches",
+			entries: []types.PutEventsRequestEntry{
+				createTestEvent(128 * 1024),
+				createTestEvent(64 * 1024),
+				createTestEvent(64 * 1024),
+				createTestEvent(64 * 1024),
+			},
+			expectedBatchSizes: []int{3, 1},
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			batches, err := batch(test.entries)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			// Assert.
+			actual := make([]int, len(batches))
+			for i, b := range batches {
+				actual[i] = len(b)
+			}
+			if diff := cmp.Diff(test.expectedBatchSizes, actual); diff != "" {
+				t.Error(diff)
+			}
+		})
+	}
+}
+
+func createTestEvent(size int) types.PutEventsRequestEntry {
+	detailType := "detailType"
+	resource := "resource"
+	source := "source"
+	entry := types.PutEventsRequestEntry{
+		Detail:       new(string),
+		DetailType:   &detailType,
+		EventBusName: aws.String("eventBusName"),
+		Resources:    []string{resource},
+		Source:       aws.String(source),
+		Time:         nil,
+		TraceHeader:  nil,
+	}
+	entry.Detail = aws.String(strings.Repeat("a", size-len(source)-len(resource)-len(detailType)-1))
+	return entry
+}
+
+func TestBatchError(t *testing.T) {
+	tests := []struct {
+		name    string
+		entries []types.PutEventsRequestEntry
+	}{
+		{
+			name: "a big message results in an error",
+			entries: []types.PutEventsRequestEntry{
+				createTestEvent(257 * 1024),
+			},
+		},
+		{
+			name: "a big message results in an error, even if there are smaller messages too",
+			entries: []types.PutEventsRequestEntry{
+				createTestEvent(1 * 1024),
+				createTestEvent(1 * 1024),
+				createTestEvent(1 * 1024),
+				createTestEvent(257 * 1024),
+			},
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			_, err := batch(test.entries)
+			if err == nil {
+				t.Fatalf("expected error not found")
+			}
+		})
 	}
 }

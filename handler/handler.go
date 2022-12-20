@@ -8,12 +8,14 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge/types"
+	"go.uber.org/multierr"
 	"go.uber.org/zap"
 )
 
@@ -27,31 +29,35 @@ var eventBusName = os.Getenv("EVENT_BUS_NAME")
 var eventSourceName = os.Getenv("EVENT_SOURCE_NAME")
 
 func Start() {
-	cfg, err := config.LoadDefaultConfig(context.Background())
-	if err != nil {
-		panic("unable to load aws config: " + err.Error())
-	}
-	eventBridge = eventbridge.NewFromConfig(cfg)
+	var err error
 	log, err = zap.NewProduction()
 	if err != nil {
 		panic("failed to create logger: " + err.Error())
 	}
 	if eventBusName == "" {
-		panic("missing EVENT_BUS_NAME environment variable")
+		log.Fatal("missing EVENT_BUS_NAME environment variable")
 	}
 	if eventSourceName == "" {
-		panic("missing EVENT_SOURCE_NAME environment variable")
+		log.Fatal("missing EVENT_SOURCE_NAME environment variable")
 	}
+	cfg, err := config.LoadDefaultConfig(context.Background())
+	if err != nil {
+		log.Fatal("unable to load aws config", zap.Error(err))
+	}
+	eventBridge = eventbridge.NewFromConfig(cfg)
+	log.Info("starting handler")
 	lambda.Start(HandleRequest)
 }
 
 func HandleRequest(ctx context.Context, event events.DynamoDBEvent) error {
 	defer log.Sync()
-	log.Info("processing records", zap.Int("count", len(event.Records)))
+	//TODO: Remove.
+	log.Info("processing records", zap.Int("count", len(event.Records)), zap.Any("event", event))
 	var outboundEvents []types.PutEventsRequestEntry
 	for i := 0; i < len(event.Records); i++ {
 		id, eventType, outboundEvent, err := createOutboundEvent(event.Records[i].Change.NewImage)
 		if err != nil {
+			log.Error("failed to create outbound event", zap.Error(err))
 			return err
 		}
 		if outboundEvent == nil {
@@ -60,18 +66,33 @@ func HandleRequest(ctx context.Context, event events.DynamoDBEvent) error {
 		outboundEvents = append(outboundEvents, *outboundEvent)
 		log.Info("found outbound event", zap.String("id", id), zap.String("type", eventType))
 	}
-	batches := batch(outboundEvents, 10)
+	batches, err := batch(outboundEvents)
+	if err != nil {
+		return fmt.Errorf("failed to create batches: %w", err)
+	}
+	var wg sync.WaitGroup
+	wg.Add(len(batches))
+	errors := make([]error, len(batches))
 	for i := 0; i < len(batches); i++ {
-		log.Info("sending batch", zap.Int("batch", i+1), zap.Int("n", len(batches)))
-		peo, err := eventBridge.PutEvents(context.Background(), &eventbridge.PutEventsInput{
-			Entries: batches[i],
-		})
-		if err != nil {
-			return fmt.Errorf("failed to send events: %v", err)
-		}
-		if peo.FailedEntryCount > 0 {
-			return fmt.Errorf("failed to send %d events", peo.FailedEntryCount)
-		}
+		go func(i int) {
+			defer wg.Done()
+			log.Info("sending batch", zap.Int("batch", i+1), zap.Int("n", len(batches)))
+			peo, err := eventBridge.PutEvents(context.Background(), &eventbridge.PutEventsInput{
+				Entries: batches[i],
+			})
+			if err != nil {
+				errors[i] = fmt.Errorf("batch %d: failed to send events: %v", i, err)
+				return
+			}
+			if peo.FailedEntryCount > 0 {
+				errors[i] = fmt.Errorf("batch %d: failed to send %d events", i, peo.FailedEntryCount)
+				return
+			}
+		}(i)
+	}
+	wg.Wait()
+	if err = multierr.Combine(errors...); err != nil {
+		return err
 	}
 	log.Info("complete", zap.Int("sent", len(outboundEvents)))
 	return nil
@@ -193,13 +214,44 @@ func getNumber(s string) (interface{}, error) {
 	return nil, fmt.Errorf("cannot parse %q as int64 or float64", s)
 }
 
-func batch(values []types.PutEventsRequestEntry, n int) (pages [][]types.PutEventsRequestEntry) {
-	for i := 0; i < len(values); i += n {
-		limit := i + n
-		if limit > len(values) {
-			limit = len(values)
+const (
+	maxBatchSizeKB = 256 * 1024
+	maxCount       = 10
+)
+
+func batch(values []types.PutEventsRequestEntry) (pages [][]types.PutEventsRequestEntry, err error) {
+	var batchFrom, batchSize int
+	for i, v := range values {
+		size := getSize(v)
+		if size > maxBatchSizeKB {
+			err = fmt.Errorf("invalid PutEventRequestEntry: item with index %d is larger than the maximum allowed size of 256KB, having a size of %dKB", i, size/1024)
+			return
 		}
-		pages = append(pages, values[i:limit])
+		if batchSize+size >= maxBatchSizeKB || i-batchFrom == maxCount {
+			pages = append(pages, values[batchFrom:i])
+			// Reset.
+			batchFrom = i
+			batchSize = 0
+		}
+		batchSize += size
+	}
+	if batchFrom < len(values) {
+		pages = append(pages, values[batchFrom:])
 	}
 	return
+}
+
+func getSize(entry types.PutEventsRequestEntry) (size int) {
+	if entry.Time != nil {
+		size += 14
+	}
+	size += len(*entry.Source)
+	size += len(*entry.DetailType)
+	if entry.Detail != nil {
+		size += len(*entry.Detail)
+	}
+	for _, r := range entry.Resources {
+		size += len(r)
+	}
+	return size
 }
