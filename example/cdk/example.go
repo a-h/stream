@@ -6,6 +6,7 @@ import (
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsdynamodb"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsevents"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awslambda"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awslogs"
 
 	"github.com/aws/aws-cdk-go/awscdk/v2/awslambdaeventsources"
 	awslambdago "github.com/aws/aws-cdk-go/awscdklambdagoalpha/v2"
@@ -35,6 +36,8 @@ func NewExampleStack(scope constructs.Construct, id string, props *ExampleStackP
 		Entry:        jsii.String("../api/notfound"),
 		Bundling:     bundlingOptions,
 		Tracing:      awslambda.Tracing_ACTIVE,
+		Timeout:      awscdk.Duration_Seconds(jsii.Number(30)),
+		LogRetention: awslogs.RetentionDays_ONE_YEAR,
 	})
 
 	// DynamoDB.
@@ -62,7 +65,8 @@ func NewExampleStack(scope constructs.Construct, id string, props *ExampleStackP
 			"EVENT_BUS_NAME":    eventBus.EventBusName(),
 			"EVENT_SOURCE_NAME": jsii.String("slot-machine"),
 		},
-		Timeout: awscdk.Duration_Minutes(jsii.Number(15)),
+		Timeout:      awscdk.Duration_Minutes(jsii.Number(15)),
+		LogRetention: awslogs.RetentionDays_ONE_YEAR,
 	})
 	slotMachineTable.GrantReadData(streamHandler)
 	eventBus.GrantPutEventsTo(streamHandler)
@@ -95,6 +99,8 @@ func NewExampleStack(scope constructs.Construct, id string, props *ExampleStackP
 		Environment: &map[string]*string{
 			"MACHINE_TABLE": slotMachineTable.TableName(),
 		},
+		Timeout:      awscdk.Duration_Seconds(jsii.Number(30)),
+		LogRetention: awslogs.RetentionDays_ONE_YEAR,
 	})
 	slotMachineTable.GrantReadWriteData(insertCoinPost)
 
@@ -108,6 +114,8 @@ func NewExampleStack(scope constructs.Construct, id string, props *ExampleStackP
 		Environment: &map[string]*string{
 			"MACHINE_TABLE": slotMachineTable.TableName(),
 		},
+		Timeout:      awscdk.Duration_Seconds(jsii.Number(30)),
+		LogRetention: awslogs.RetentionDays_ONE_YEAR,
 	})
 	slotMachineTable.GrantReadWriteData(pullHandlePost)
 	// POST /machine/id handler.
@@ -120,6 +128,8 @@ func NewExampleStack(scope constructs.Construct, id string, props *ExampleStackP
 		Environment: &map[string]*string{
 			"MACHINE_TABLE": slotMachineTable.TableName(),
 		},
+		Timeout:      awscdk.Duration_Seconds(jsii.Number(30)),
+		LogRetention: awslogs.RetentionDays_ONE_YEAR,
 	})
 	slotMachineTable.GrantReadWriteData(machinePost)
 	// GET /machine/id handler.
@@ -132,6 +142,8 @@ func NewExampleStack(scope constructs.Construct, id string, props *ExampleStackP
 		Environment: &map[string]*string{
 			"MACHINE_TABLE": slotMachineTable.TableName(),
 		},
+		Timeout:      awscdk.Duration_Seconds(jsii.Number(30)),
+		LogRetention: awslogs.RetentionDays_ONE_YEAR,
 	})
 	slotMachineTable.GrantReadData(machineGet)
 
