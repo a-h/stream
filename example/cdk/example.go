@@ -67,18 +67,18 @@ func NewExampleStack(scope constructs.Construct, id string, props *ExampleStackP
 	slotMachineTable.GrantReadData(streamHandler)
 	eventBus.GrantPutEventsTo(streamHandler)
 
-	var filters []*map[string]interface{}
-	filter := awslambda.FilterCriteria_Filter(&map[string]interface{}{
-		"eventName": awslambda.FilterRule_IsEqual("INSERT"),
-		"dynamodb": &map[string]interface{}{
-			"NewImage": &map[string]interface{}{
-				"_sk": &map[string]interface{}{
-					"S": awslambda.FilterRule_BeginsWith(jsii.String("OUTBOUND/")),
+	filters := []*map[string]any{
+		awslambda.FilterCriteria_Filter(&map[string]any{
+			"eventName": awslambda.FilterRule_IsEqual("INSERT"),
+			"dynamodb": &map[string]any{
+				"NewImage": &map[string]any{
+					"_sk": &map[string]any{
+						"S": awslambda.FilterRule_BeginsWith(jsii.String("OUTBOUND/")),
+					},
 				},
 			},
-		},
-	})
-	filters = append(filters, filter)
+		}),
+	}
 	streamHandler.AddEventSource(awslambdaeventsources.NewDynamoEventSource(slotMachineTable, &awslambdaeventsources.DynamoEventSourceProps{
 		StartingPosition: awslambda.StartingPosition_LATEST,
 		Enabled:          jsii.Bool(true),
