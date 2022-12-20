@@ -1,14 +1,15 @@
 package main
 
 import (
-	"github.com/aws/aws-cdk-go/awscdk"
-	"github.com/aws/aws-cdk-go/awscdk/awsapigateway"
-	"github.com/aws/aws-cdk-go/awscdk/awsdynamodb"
-	"github.com/aws/aws-cdk-go/awscdk/awsevents"
-	"github.com/aws/aws-cdk-go/awscdk/awslambda"
-	"github.com/aws/aws-cdk-go/awscdk/awslambdaeventsources"
-	"github.com/aws/aws-cdk-go/awscdk/awslambdago"
-	"github.com/aws/constructs-go/constructs/v3"
+	"github.com/aws/aws-cdk-go/awscdk/v2"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awsapigateway"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awsdynamodb"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awsevents"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awslambda"
+
+	"github.com/aws/aws-cdk-go/awscdk/v2/awslambdaeventsources"
+	awslambdago "github.com/aws/aws-cdk-go/awscdklambdagoalpha/v2"
+	"github.com/aws/constructs-go/constructs/v10"
 	"github.com/aws/jsii-runtime-go"
 )
 
@@ -29,10 +30,11 @@ func NewExampleStack(scope constructs.Construct, id string, props *ExampleStackP
 	}
 	// notFound.
 	notFound := awslambdago.NewGoFunction(stack, jsii.String("notFoundHandler"), &awslambdago.GoFunctionProps{
-		Runtime:  awslambda.Runtime_GO_1_X(),
-		Entry:    jsii.String("../api/notfound"),
-		Bundling: bundlingOptions,
-		Tracing:  awslambda.Tracing_ACTIVE,
+		Runtime:      awslambda.Runtime_PROVIDED_AL2(),
+		Architecture: awslambda.Architecture_ARM_64(),
+		Entry:        jsii.String("../api/notfound"),
+		Bundling:     bundlingOptions,
+		Tracing:      awslambda.Tracing_ACTIVE,
 	})
 
 	// DynamoDB.
@@ -51,28 +53,45 @@ func NewExampleStack(scope constructs.Construct, id string, props *ExampleStackP
 
 	// Process streams.
 	streamHandler := awslambdago.NewGoFunction(stack, jsii.String("streamHandler"), &awslambdago.GoFunctionProps{
-		Runtime:  awslambda.Runtime_GO_1_X(),
-		Entry:    jsii.String("../api/streamhandler/"),
-		Bundling: bundlingOptions,
-		Tracing:  awslambda.Tracing_ACTIVE,
+		Runtime:      awslambda.Runtime_PROVIDED_AL2(),
+		Architecture: awslambda.Architecture_ARM_64(),
+		Entry:        jsii.String("../api/streamhandler/"),
+		Bundling:     bundlingOptions,
+		Tracing:      awslambda.Tracing_ACTIVE,
 		Environment: &map[string]*string{
 			"EVENT_BUS_NAME":    eventBus.EventBusName(),
 			"EVENT_SOURCE_NAME": jsii.String("slot-machine"),
 		},
+		Timeout: awscdk.Duration_Minutes(jsii.Number(15)),
 	})
 	slotMachineTable.GrantReadData(streamHandler)
 	eventBus.GrantPutEventsTo(streamHandler)
+
+	var filters []*map[string]interface{}
+	filter := awslambda.FilterCriteria_Filter(&map[string]interface{}{
+		"eventName": awslambda.FilterRule_IsEqual("INSERT"),
+		"dynamodb": &map[string]interface{}{
+			"NewImage": &map[string]interface{}{
+				"_sk": &map[string]interface{}{
+					"S": awslambda.FilterRule_BeginsWith(jsii.String("OUTBOUND/")),
+				},
+			},
+		},
+	})
+	filters = append(filters, filter)
 	streamHandler.AddEventSource(awslambdaeventsources.NewDynamoEventSource(slotMachineTable, &awslambdaeventsources.DynamoEventSourceProps{
 		StartingPosition: awslambda.StartingPosition_LATEST,
 		Enabled:          jsii.Bool(true),
+		Filters:          &filters,
 	}))
 
 	// POST /machine/id/insertCoin handler.
 	insertCoinPost := awslambdago.NewGoFunction(stack, jsii.String("insertCoinHandler"), &awslambdago.GoFunctionProps{
-		Runtime:  awslambda.Runtime_GO_1_X(),
-		Entry:    jsii.String("../api/machine/insertcoin/post"),
-		Bundling: bundlingOptions,
-		Tracing:  awslambda.Tracing_ACTIVE,
+		Runtime:      awslambda.Runtime_PROVIDED_AL2(),
+		Architecture: awslambda.Architecture_ARM_64(),
+		Entry:        jsii.String("../api/machine/insertcoin/post"),
+		Bundling:     bundlingOptions,
+		Tracing:      awslambda.Tracing_ACTIVE,
 		Environment: &map[string]*string{
 			"MACHINE_TABLE": slotMachineTable.TableName(),
 		},
@@ -81,10 +100,11 @@ func NewExampleStack(scope constructs.Construct, id string, props *ExampleStackP
 
 	// POST /machine/id/pullHandle handler.
 	pullHandlePost := awslambdago.NewGoFunction(stack, jsii.String("pullHandleHandler"), &awslambdago.GoFunctionProps{
-		Runtime:  awslambda.Runtime_GO_1_X(),
-		Entry:    jsii.String("../api/machine/pullhandle/post"),
-		Bundling: bundlingOptions,
-		Tracing:  awslambda.Tracing_ACTIVE,
+		Runtime:      awslambda.Runtime_PROVIDED_AL2(),
+		Architecture: awslambda.Architecture_ARM_64(),
+		Entry:        jsii.String("../api/machine/pullhandle/post"),
+		Bundling:     bundlingOptions,
+		Tracing:      awslambda.Tracing_ACTIVE,
 		Environment: &map[string]*string{
 			"MACHINE_TABLE": slotMachineTable.TableName(),
 		},
@@ -92,10 +112,11 @@ func NewExampleStack(scope constructs.Construct, id string, props *ExampleStackP
 	slotMachineTable.GrantReadWriteData(pullHandlePost)
 	// POST /machine/id handler.
 	machinePost := awslambdago.NewGoFunction(stack, jsii.String("machinePostHandler"), &awslambdago.GoFunctionProps{
-		Runtime:  awslambda.Runtime_GO_1_X(),
-		Entry:    jsii.String("../api/machine/post"),
-		Bundling: bundlingOptions,
-		Tracing:  awslambda.Tracing_ACTIVE,
+		Runtime:      awslambda.Runtime_PROVIDED_AL2(),
+		Architecture: awslambda.Architecture_ARM_64(),
+		Entry:        jsii.String("../api/machine/post"),
+		Bundling:     bundlingOptions,
+		Tracing:      awslambda.Tracing_ACTIVE,
 		Environment: &map[string]*string{
 			"MACHINE_TABLE": slotMachineTable.TableName(),
 		},
@@ -103,10 +124,11 @@ func NewExampleStack(scope constructs.Construct, id string, props *ExampleStackP
 	slotMachineTable.GrantReadWriteData(machinePost)
 	// GET /machine/id handler.
 	machineGet := awslambdago.NewGoFunction(stack, jsii.String("machineGetHandler"), &awslambdago.GoFunctionProps{
-		Runtime:  awslambda.Runtime_GO_1_X(),
-		Entry:    jsii.String("../api/machine/get"),
-		Bundling: bundlingOptions,
-		Tracing:  awslambda.Tracing_ACTIVE,
+		Runtime:      awslambda.Runtime_PROVIDED_AL2(),
+		Architecture: awslambda.Architecture_ARM_64(),
+		Entry:        jsii.String("../api/machine/get"),
+		Bundling:     bundlingOptions,
+		Tracing:      awslambda.Tracing_ACTIVE,
 		Environment: &map[string]*string{
 			"MACHINE_TABLE": slotMachineTable.TableName(),
 		},
