@@ -68,8 +68,8 @@ func TestState(t *testing.T) {
 				return m
 			}(),
 			expectedEvents: []stream.OutboundEvent{
-				GameResult{MachineID: "id", Win: true},
-				Payout{Amount: 4},
+				GamePlayed{MachineID: "id", Won: true},
+				PayoutMade{Amount: 4},
 			},
 		},
 	}

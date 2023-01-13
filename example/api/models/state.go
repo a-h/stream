@@ -37,52 +37,31 @@ type SlotMachine struct {
 func (s *SlotMachine) Process(event stream.InboundEvent) (outbound []stream.OutboundEvent, err error) {
 	switch e := event.(type) {
 	case InsertCoin:
-		ok := s.InsertCoin()
-		if !ok {
-			err = ErrCannotInsertCoin
-			return
-		}
-		break
+		return s.InsertCoin()
 	case PullHandle:
-		win, ok := s.PullHandle()
-		if !ok {
-			err = ErrCannotPullHandle
-			return
-		}
-		outbound = append(outbound, GameResult{
-			MachineID: s.ID,
-			Win:       win,
-		})
-		if win {
-			outbound = append(outbound, Payout{
-				UserID: e.UserID,
-				Amount: s.Payout,
-			})
-		}
+		return s.PullHandle(e)
 	}
 	return
 }
 
-func (s *SlotMachine) InsertCoin() (ok bool) {
+func (s *SlotMachine) InsertCoin() (outbound []stream.OutboundEvent, err error) {
 	if s.IsCoinInSlot {
-		return false
+		return nil, ErrCannotInsertCoin
 	}
 	s.IsCoinInSlot = true
-	return true
+	return
 }
 
-func (s *SlotMachine) PullHandle() (won bool, ok bool) {
+func (s *SlotMachine) PullHandle(e PullHandle) (outbound []stream.OutboundEvent, err error) {
 	// Complain if we can't take the coin.
-	ok = s.IsCoinInSlot
-	if !ok {
-		return
+	if !s.IsCoinInSlot {
+		return nil, ErrCannotPullHandle
 	}
+	// Take the coin.
 	s.IsCoinInSlot = false
 
-	// See if we win.
-	won = Win(s.WinChance)
-
 	// Update the stats.
+	won := Win(s.WinChance)
 	s.Games++
 	if won {
 		s.Wins++
@@ -90,6 +69,18 @@ func (s *SlotMachine) PullHandle() (won bool, ok bool) {
 	} else {
 		s.Losses++
 		s.Balance++
+	}
+
+	// Send events.
+	outbound = append(outbound, GamePlayed{
+		MachineID: s.ID,
+		Won:       won,
+	})
+	if won {
+		outbound = append(outbound, PayoutMade{
+			UserID: e.UserID,
+			Amount: s.Payout,
+		})
 	}
 	return
 }
@@ -109,18 +100,18 @@ func (_ PullHandle) EventName() string { return "PullHandle" }
 func (_ PullHandle) IsInbound()        {}
 
 // Output events.
-type GameResult struct {
+type GamePlayed struct {
 	MachineID string `json:"machineId"`
-	Win       bool   `json:"win"`
+	Won       bool   `json:"won"`
 }
 
-func (_ GameResult) EventName() string { return "GameResult" }
-func (_ GameResult) IsOutbound()       {}
+func (_ GamePlayed) EventName() string { return "GamePlayed" }
+func (_ GamePlayed) IsOutbound()       {}
 
-type Payout struct {
+type PayoutMade struct {
 	UserID string `json:"userId"`
 	Amount int    `json:"amount"`
 }
 
-func (_ Payout) EventName() string { return "Payout" }
-func (_ Payout) IsOutbound()       {}
+func (_ PayoutMade) EventName() string { return "PayoutMade" }
+func (_ PayoutMade) IsOutbound()       {}
